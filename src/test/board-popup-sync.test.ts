@@ -428,6 +428,99 @@ describe("board related task navigation", () => {
 		description: "GRANDCHILD-BODY",
 	});
 
+	for (const fail of [false, true]) {
+		it(`hands off the refreshed related task and restores navigation after ${fail ? "failure" : "success"}`, async () => {
+			const tasks = [parent, child];
+			const launched: Task[] = [];
+			let finish: (() => void) | undefined;
+			await withBoardPopup(
+				{
+					tasks: [parent],
+					readTasks: tasks,
+					onTaskLaunch: (task, onProgress) => {
+						launched.push(task);
+						onProgress("Starting Codex...");
+						return new Promise((resolve, reject) => {
+							finish = () => (fail ? reject(new Error("related_start_failed")) : resolve({ tabId: "w1:t2" }));
+						});
+					},
+				},
+				async ({ focused, popupBody, publishTasks, text }) => {
+					popupBody()?.setScroll?.(12);
+					const scroll = popupBody()?.childBase;
+					pressKey(focused(), "r");
+					await Bun.sleep(30);
+					pressKey(focused(), "enter");
+					await Bun.sleep(30);
+					tasks[1] = { ...child, description: "BEFORE-HANDOFF" };
+					await publishTasks([parent]);
+					pressKey(focused(), "w");
+					await Bun.sleep(20);
+					expect(launched.map((task) => task.id)).toEqual([child.id]);
+					expect(launched[0]?.description).toBe("BEFORE-HANDOFF");
+					const original = popupBody();
+					tasks[1] = { ...child, description: "DURING-HANDOFF" };
+					await publishTasks([parent]);
+					expect(popupBody()).toBe(original);
+					expect(text()).toContain("Starting Codex...");
+					finish?.();
+					await Bun.sleep(40);
+					if (fail) {
+						expect(text()).toContain("related_start_failed");
+						pressKey(focused(), "enter");
+						await Bun.sleep(20);
+					}
+					expect(popupBody()?.getContent?.()).toContain("DURING-HANDOFF");
+					pressKey(focused(), "escape");
+					await Bun.sleep(40);
+					expect(popupBody()?.getContent?.()).toContain("PARENT-LINE-0");
+					expect(popupBody()?.childBase).toBe(scroll);
+					pressKey(focused(), "q");
+					await Bun.sleep(20);
+					expect(popupBody()).toBeUndefined();
+				},
+			);
+		});
+	}
+
+	it("ignores handoff while a return destination is being read", async () => {
+		let release: (() => void) | undefined;
+		let returning = false;
+		const launched: string[] = [];
+		await withBoardPopup(
+			{
+				tasks: [parent],
+				readTask: async (id) => {
+					if (id === parent.id && returning)
+						await new Promise<void>((resolve) => {
+							release = resolve;
+						});
+					return id === parent.id ? parent : id === child.id ? child : null;
+				},
+				onTaskLaunch: async (task) => {
+					launched.push(task.id);
+					return { tabId: "w1:t2" };
+				},
+			},
+			async ({ focused, popupBody }) => {
+				pressKey(focused(), "r");
+				await Bun.sleep(30);
+				pressKey(focused(), "enter");
+				await Bun.sleep(30);
+				returning = true;
+				pressKey(focused(), "escape");
+				await Bun.sleep(10);
+				pressKey(focused(), "w");
+				await Bun.sleep(20);
+				returning = false;
+				release?.();
+				await Bun.sleep(30);
+				expect(launched).toEqual([]);
+				expect(popupBody()?.getContent?.()).toContain("PARENT-LINE-0");
+			},
+		);
+	});
+
 	it("deduplicates references and native children, ignores paths, and opens a filtered-out task", async () => {
 		await withBoardPopup(
 			{

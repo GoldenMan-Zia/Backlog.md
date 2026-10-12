@@ -12,9 +12,11 @@ const interactive = process.env.RUN_INTERACTIVE_TUI_TESTS === "1" && expectPath 
 const itInteractive = interactive ? it : it.skip;
 
 describe("Herdr handoff in a real terminal with a fixture CLI", () => {
-	for (const fail of [false, true]) {
+	for (const { fail, related } of [false, true].flatMap((fail) =>
+		[false, true].map((related) => ({ fail, related })),
+	)) {
 		itInteractive(
-			`locks input and restores the detail after ${fail ? "failure" : "success"}`,
+			`locks input and restores ${related ? "related" : "board"} detail after ${fail ? "failure" : "success"}`,
 			async () => {
 				const directory = createUniqueTestDir("herdr-handoff-pty");
 				await mkdir(directory, { recursive: true });
@@ -38,12 +40,37 @@ describe("Herdr handoff in a real terminal with a fixture CLI", () => {
 						},
 						false,
 					);
-					const taskPath = (await core.fs.listTasks())[0]?.filePath;
+					if (related) {
+						await core.createTask(
+							{
+								id: "task-1.1",
+								title: "Handoff PTY child",
+								parentTaskId: "task-1",
+								status: "To Do",
+								createdDate: "2026-10-12",
+								assignee: [],
+								labels: [],
+								dependencies: [],
+								description: "CHILD-HANDOFF-BODY",
+								rawContent: "",
+							},
+							false,
+						);
+					}
+					const tasks = await core.fs.listTasks();
+					const taskPath = tasks.find((task) => task.id.toLowerCase() === "task-1")?.filePath;
 					if (!taskPath) throw new Error("Missing fixture task");
 					const original = await readFile(taskPath);
+					const taskFiles = await Promise.all(
+						tasks.map(async (task) => {
+							if (!task.filePath) throw new Error("Missing fixture task path");
+							return { path: task.filePath, content: await readFile(task.filePath) };
+						}),
+					);
 					const bin = join(directory, "bin");
 					await mkdir(bin);
 					const calls = join(directory, "herdr-calls.log");
+					const prefill = join(directory, "herdr-prefill.log");
 					const gate = join(directory, "release-agent-start");
 					await writeFile(
 						join(bin, "herdr"),
@@ -59,6 +86,7 @@ elif [ "$3 $4" = 'agent start' ]; then
   done
   ${fail ? "printf '%s' 'fixture_start_failed' >&2; exit 1" : ":"}
 elif [ "$3 $4" = 'pane send-text' ]; then
+  printf '%s' "$6" > '${prefill}'
   sleep 0.4
 fi
 `,
@@ -84,6 +112,22 @@ expect {
   -re {PTY-BODY} {}
   timeout { exit 92 }
 }
+${
+	related
+		? `sleep 0.2
+send "r"
+expect {
+  -re {Related.*Tasks} {}
+  timeout { exit 97 }
+}
+sleep 0.2
+send "\\r"
+expect {
+  -re {CHILD-HANDOFF-BODY} {}
+  timeout { exit 98 }
+}`
+		: ""
+}
 sleep 0.2
 send "w"
 expect {
@@ -102,6 +146,16 @@ expect {
 ${fail ? 'send "\\r"\nsleep 0.2' : ""}
 send "q"
 sleep 0.3
+${
+	related
+		? `expect {
+  -re {PTY-BODY} {}
+  timeout { exit 99 }
+}
+send "q"
+sleep 0.3`
+		: ""
+}
 send "q"
 expect {
   eof {}
@@ -128,6 +182,11 @@ exit 0
 						fail ? ["tab create", "agent start"] : ["tab create", "agent start", "pane send-text", "tab focus"],
 					);
 					expect(await readFile(taskPath)).toEqual(original);
+					for (const task of taskFiles) expect(await readFile(task.path)).toEqual(task.content);
+					if (!fail) {
+						const prompt = await readFile(prefill, "utf8");
+						expect(prompt).toContain(`读取 ${related ? "TASK-1.1" : "TASK-1"}，`);
+					}
 				} finally {
 					await safeCleanup(directory);
 				}

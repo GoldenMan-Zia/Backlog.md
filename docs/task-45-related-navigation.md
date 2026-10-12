@@ -2,21 +2,25 @@
 
 ## Local entry
 
-Run the isolated source version:
+Run the source version from the main checkout:
 
 ```sh
-/Users/goldenman/git/Backlog-task-45/scripts/backlog-related-board
+/Users/goldenman/git/Backlog.md/scripts/backlog-related-board
 ```
 
 The launcher explicitly sets `BACKLOG_CWD=/Users/goldenman/git`. It requires Bun and
-the worktree's dependencies. It does not replace the installed `backlog` command or
+the checkout's dependencies. It does not replace the installed `backlog` command or
 the existing Herdr launcher.
 
-Alternatively, from this worktree:
+Alternatively, from `/Users/goldenman/git/Backlog.md`:
 
 ```sh
 BACKLOG_CWD='/Users/goldenman/git' bun src/cli.ts board
 ```
+
+The existing `backlog-herdr-board` launcher also includes related navigation after
+integration. Use it, or pass `--herdr-session default` to the source launcher, to
+enable W handoff. See [herdr-local.md](herdr-local.md) for configuration.
 
 ## Keys
 
@@ -50,22 +54,29 @@ Editing, copying the ID, completing and archiving operate on the displayed task.
 Existing read-only and confirmation checks remain in place. Navigation itself does
 not change tasks or statuses.
 
-## Isolation
+W hands off the displayed task, including a related task outside the board corpus.
+Handoff is ignored while navigation is pending. Watcher updates are deferred during
+handoff; after success or error acknowledgement, the latest detail is restored and
+Esc/q still returns through the navigation stack.
+
+## Implementation history
 
 Worktree: `/Users/goldenman/git/Backlog-task-45`.
 Branch: `tasks/task-45-related-navigation`.
-Base: `92c79f84de5e8f1f6844ec5316f7b663da9fd4b9`.
+Original base: `92c79f84de5e8f1f6844ec5316f7b663da9fd4b9`.
 
-This branch contains only TASK-45 changes. No TASK-46/Herdr changes are included;
-the committed base has no W handoff. Combined W/R behavior must be verified when
-the separate work is integrated. The original worktree and existing launchers are
-not modified. No commit or push is made.
+TASK-45 was implemented independently of the uncommitted Herdr work. After the
+user confirmed testing and requested integration, the branch was rebased onto
+`261c29f8` (the committed Herdr loading and result feedback). TASK-45's commits
+contain related navigation and its integration tests, not a copy of the Herdr
+implementation. The existing installed launchers are not replaced. No push is made.
 
 ## Verification
 
 ```sh
 bun test --timeout=10000 src/test/board-popup-sync.test.ts src/test/related-tasks.test.ts
 RUN_INTERACTIVE_TUI_TESTS=1 bun test src/test/board-related-tasks-pty.test.ts
+RUN_INTERACTIVE_TUI_TESTS=1 bun test src/test/herdr-handoff-pty.test.ts
 bunx tsc --noEmit
 bunx biome check .
 ```
@@ -76,7 +87,7 @@ three-level navigation path, visible scroll restoration, missing/ambiguous IDs,
 external changes and retained picker focus. It does not mutate the work ledger.
 Transcripts are saved under `tmp/tui-interactive-transcripts/` (Git-ignored).
 
-### Results on 2026-10-12
+### Independent verification on 2026-10-12
 
 - 142 related tests pass across 19 files, including the enabled PTY test.
 - The related-task choice loader has 100% line and function coverage in the
@@ -92,7 +103,23 @@ Transcripts are saved under `tmp/tui-interactive-transcripts/` (Git-ignored).
   visible first row. Navigation now saves and restores the visible row. Widget
   tests also use real terminal dimensions and assert that visible row.
 
-W handoff integration remains unverified because its changes are deliberately not
-part of this branch. TASK-45 stays In Progress with acceptance criterion 3 pending;
-criteria 1, 2 and 4 are verified. No other task, repository branch or launcher is
-merged into this worktree.
+### Integration verification on 2026-10-12
+
+Combination tests cover handing off the refreshed related detail, watcher changes
+during handoff, success/failure recovery, retained parent scroll and return to the
+board. Real-terminal CLI tests use a fixture Herdr executable and verify that the
+prefilled template targets the related task, both task files stay unchanged, input
+is locked during loading, and Esc/q returns to the parent and board. They do not
+contact or change the user's Herdr session.
+
+A regression test catches W acting on the old detail while a return destination is
+still being read. The shared handoff guard now also checks pending navigation.
+
+- 170 tests pass across 22 files, with 563 assertions and no failures, including the
+  enabled navigation PTY test and all four success/failure Herdr PTY cases.
+- TypeScript type checking passes. Biome checks all 439 files without fixes.
+- `git diff --check` passes.
+- Logs: `/tmp/task-45-integrated-tests.log`, `/tmp/task-45-integrated-types.log`,
+  `/tmp/task-45-integrated-biome.log`. The independent verification artifacts remain
+  in the implementation worktree's Git-ignored `tmp/` directory.
+- The user reports the independent version's testing as OK before integration.

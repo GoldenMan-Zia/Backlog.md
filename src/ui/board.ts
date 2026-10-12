@@ -1123,7 +1123,14 @@ export async function renderBoardTui(
 		};
 
 		const launchTask = (task: Task): Promise<void> => {
-			if (pendingTaskLaunch || modalOpen || filterPopupOpen || moveOp || currentFocus === "filters") {
+			if (
+				pendingTaskLaunch ||
+				modalOpen ||
+				popupNavigationPending ||
+				filterPopupOpen ||
+				moveOp ||
+				currentFocus === "filters"
+			) {
 				return Promise.resolve();
 			}
 			const launch = options?.onTaskLaunch;
