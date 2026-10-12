@@ -7,6 +7,7 @@ import { findLocalDuplicateTaskIds } from "../core/duplicate-task-repair.ts";
 import type { LabelMatchMode, Milestone, Task, TaskCreateInput } from "../types/index.ts";
 import { watchConfig } from "../utils/config-watcher.ts";
 import { formatDuplicateTaskIdSummary } from "../utils/duplicate-detection.ts";
+import { launchTaskInHerdr } from "../utils/herdr.ts";
 import { collectAvailableLabels } from "../utils/label-filter.ts";
 import { hasAnyPrefix } from "../utils/prefix-config.ts";
 import { applyTaskFilters, createTaskSearchIndex } from "../utils/task-search.ts";
@@ -19,6 +20,7 @@ import { type ViewState, ViewSwitcher, type ViewType } from "./view-switcher.ts"
 
 export interface UnifiedViewOptions {
 	core: Core;
+	herdr?: { session: string; workspace?: string };
 	initialView: ViewType;
 	selectedTask?: Task;
 	tasks?: Task[];
@@ -498,6 +500,15 @@ export async function runUnifiedView(options: UnifiedViewOptions): Promise<void>
 					onTaskSelect: (task) => {
 						selectedTask = task;
 					},
+					onTaskLaunch: options.herdr
+						? (task, onProgress) =>
+								launchTaskInHerdr(task, {
+									session: options.herdr?.session ?? "",
+									workspace: options.herdr?.workspace,
+									cwd: options.core.fs.rootDir,
+									onProgress,
+								})
+						: undefined,
 					onTabPress,
 					filters: createKanbanSharedFilters(currentFilters),
 					availableLabels: getBoardAvailableLabels(),

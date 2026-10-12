@@ -72,6 +72,8 @@ function screenText(screen: ScreenInterface): string {
 async function withBoardPopup(
 	options: {
 		editTaskInTui?: () => Promise<TuiTaskEditResult>;
+		onTaskLaunch?: (task: Task, onProgress: (stage: string) => void) => Promise<{ tabId: string }>;
+		openPopup?: boolean;
 		tasks?: Task[];
 		hideEmptyColumns?: boolean;
 		/** Columns to step right through before opening the popup. */
@@ -95,6 +97,7 @@ async function withBoardPopup(
 		const boardPromise = renderBoardTui(options.tasks ?? [createTask(), OTHER_TASK], BOARD_STATUSES, "horizontal", 20, {
 			screen,
 			core,
+			onTaskLaunch: options.onTaskLaunch,
 			hideEmptyColumns: options.hideEmptyColumns,
 			subscribeUpdates: (update) => {
 				subscriber = update;
@@ -108,9 +111,11 @@ async function withBoardPopup(
 		}
 
 		// Open the popup on the selected task in the focused column.
-		pressKey(screen, "enter");
-		await Bun.sleep(30);
-		expect(findPopupBody(screen)).toBeDefined();
+		if (options.openPopup !== false) {
+			pressKey(screen, "enter");
+			await Bun.sleep(30);
+			expect(findPopupBody(screen)).toBeDefined();
+		}
 
 		await run({
 			screen,
@@ -137,6 +142,125 @@ async function withBoardPopup(
 		else Reflect.deleteProperty(process.stdout, "isTTY");
 	}
 }
+
+describe("board Herdr handoff", () => {
+	it("restores real keyboard delivery to task details after an error is acknowledged", async () => {
+		await withBoardPopup(
+			{
+				onTaskLaunch: async () => {
+					throw new Error("fixture_start_failed");
+				},
+			},
+			async ({ screen, popupBody }) => {
+				const press = (bytes: string) => {
+					(screen.program as unknown as { input: { emit: (event: string, ...args: unknown[]) => void } }).input.emit(
+						"data",
+						Buffer.from(bytes),
+					);
+				};
+				press("w");
+				await Bun.sleep(20);
+				press("\r");
+				await Bun.sleep(20);
+				press("\x1b");
+				await Bun.sleep(20);
+				expect(popupBody()).toBeUndefined();
+			},
+		);
+	});
+
+	it("keeps task updates behind the loading and restores the latest detail after handoff", async () => {
+		let finish: ((value: { tabId: string }) => void) | undefined;
+		await withBoardPopup(
+			{
+				onTaskLaunch: (_task, onProgress) => {
+					onProgress("Starting Codex...");
+					return new Promise((resolve) => {
+						finish = resolve;
+					});
+				},
+			},
+			async ({ focused, popupBody, publishTasks, text }) => {
+				pressKey(focused(), "w");
+				await Bun.sleep(20);
+				const original = popupBody();
+				await publishTasks([createTask({ title: "Updated while starting", description: "UPDATED-BODY" }), OTHER_TASK]);
+				expect(text()).toContain("Starting Codex...");
+				expect(popupBody()).toBe(original);
+				finish?.({ tabId: "w1:t2" });
+				await Bun.sleep(30);
+				expect(popupBody()?.getContent?.()).toContain("UPDATED-BODY");
+			},
+		);
+	});
+
+	it("hands the selected board task off without changing its status or closing the board", async () => {
+		const launched: Task[] = [];
+		await withBoardPopup(
+			{
+				openPopup: false,
+				onTaskLaunch: async (task) => {
+					launched.push(task);
+					return { tabId: "w1:t2" };
+				},
+			},
+			async ({ screen, text }) => {
+				pressKey(screen, "w");
+				await Bun.sleep(30);
+				expect(launched.map((task) => task.id)).toEqual([OPEN_TASK_ID]);
+				expect(launched[0]?.status).toBe("To Do");
+				expect(text()).toContain("w1:t2");
+				expect(text()).toContain("not submitted");
+			},
+		);
+	});
+
+	it("hands off the task in the detail popup and ignores repeated keys while starting", async () => {
+		let finish: ((value: { tabId: string }) => void) | undefined;
+		const launched: Task[] = [];
+		await withBoardPopup(
+			{
+				onTaskLaunch: (task) => {
+					launched.push(task);
+					return new Promise((resolve) => {
+						finish = resolve;
+					});
+				},
+			},
+			async ({ focused, screen, popupBody, text }) => {
+				pressKey(focused(), "w");
+				pressKey(focused(), "w");
+				pressKey(screen, "w");
+				await Bun.sleep(20);
+				expect(launched.map((task) => task.id)).toEqual([OPEN_TASK_ID]);
+				finish?.({ tabId: "w1:t2" });
+				await Bun.sleep(30);
+				expect(popupBody()).toBeDefined();
+				expect(text()).toContain("not submitted");
+			},
+		);
+	});
+
+	it("reports startup failure and keeps the popup available", async () => {
+		await withBoardPopup(
+			{
+				onTaskLaunch: async () => {
+					throw new Error("Herdr is not running");
+				},
+			},
+			async ({ focused, popupBody, text }) => {
+				pressKey(focused(), "w");
+				await Bun.sleep(30);
+				expect(text()).toContain("Herdr is not running");
+				expect(popupBody()).toBeDefined();
+				pressKey(focused(), "escape");
+				await Bun.sleep(20);
+				expect(popupBody()).toBeDefined();
+				expect(text()).not.toContain("Herdr is not running");
+			},
+		);
+	});
+});
 
 describe("board task popup stays in sync with live task state", () => {
 	it("rebuilds the popup after an in-popup editor edit", async () => {

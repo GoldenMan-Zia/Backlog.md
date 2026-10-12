@@ -54,10 +54,18 @@ const TASK_LIST_SHORTCUTS: Shortcut[] = [
 
 export function getHelpShortcuts(
 	context: HelpPopupContext = "board",
-	options: { hasProjects?: boolean } = {},
+	options: { hasProjects?: boolean; hasHerdr?: boolean } = {},
 ): Shortcut[] {
 	const shortcuts = context === "task-list" ? TASK_LIST_SHORTCUTS : BOARD_SHORTCUTS;
-	return options.hasProjects ? shortcuts : shortcuts.filter((shortcut) => shortcut.key !== "V");
+	const visible = options.hasProjects ? [...shortcuts] : shortcuts.filter((shortcut) => shortcut.key !== "V");
+	if (context === "board" && options.hasHerdr) {
+		visible.splice(
+			visible.findIndex((shortcut) => shortcut.key === "?"),
+			0,
+			{ key: "W", desc: "Open Codex in Herdr (prefill only)" },
+		);
+	}
+	return visible;
 }
 
 /** Popup rows spent on borders, the top spacer and the help line, leaving one row per shortcut. */
@@ -77,7 +85,7 @@ export function getHelpPopupHeight(shortcutCount: number, screenHeight: number):
 export async function openHelpPopup(
 	screen: ScreenInterface,
 	context: HelpPopupContext = "board",
-	options: { hasProjects?: boolean } = {},
+	options: { hasProjects?: boolean; hasHerdr?: boolean } = {},
 ): Promise<void> {
 	return new Promise<void>((resolve) => {
 		let settled = false;

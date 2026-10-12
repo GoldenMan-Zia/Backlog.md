@@ -4480,10 +4480,26 @@ function addBoardOptions(cmd: Command) {
 	return cmd
 		.option("-l, --layout <layout>", "board layout (horizontal|vertical)", "horizontal")
 		.option("--vertical", "use vertical layout (shortcut for --layout vertical)")
-		.option("-m, --milestones", "group tasks by milestone");
+		.option("-m, --milestones", "group tasks by milestone")
+		.option(
+			"--herdr-session <name>",
+			"target Herdr session for W: open Codex with an unsubmitted task template",
+			process.env.BACKLOG_HERDR_SESSION,
+		)
+		.option(
+			"--herdr-workspace <id>",
+			"target workspace in the Herdr session (defaults to its active workspace)",
+			process.env.BACKLOG_HERDR_WORKSPACE,
+		);
 }
 
-async function handleBoardView(options: { layout?: string; vertical?: boolean; milestones?: boolean }) {
+async function handleBoardView(options: {
+	layout?: string;
+	vertical?: boolean;
+	milestones?: boolean;
+	herdrSession?: string;
+	herdrWorkspace?: string;
+}) {
 	const cwd = await requireProjectRoot();
 	const core = new Core(cwd);
 	const config = await core.filesystem.loadConfig();
@@ -4495,6 +4511,7 @@ async function handleBoardView(options: { layout?: string; vertical?: boolean; m
 	await runUnifiedView({
 		core,
 		initialView: "kanban",
+		herdr: options.herdrSession ? { session: options.herdrSession, workspace: options.herdrWorkspace } : undefined,
 		milestoneMode: options.milestones,
 		tasksLoader: async (updateProgress) => {
 			const [tasks, milestoneEntities, archivedMilestones] = await Promise.all([

@@ -27,6 +27,7 @@ import { openConfirmPopup } from "./components/confirm-popup.ts";
 import { createFilterHeader, type FilterHeader, type FilterState } from "./components/filter-header.ts";
 import { openMultiSelectFilterPopup, openSingleSelectFilterPopup } from "./components/filter-popup.ts";
 import type { BoundaryNavigationKey } from "./components/generic-list.ts";
+import { createHandoffFeedback } from "./components/handoff-feedback.ts";
 import { openHelpPopup } from "./components/help-popup.ts";
 import { openTaskComposer, type TaskComposerOptions } from "./components/task-composer.ts";
 import { formatFooterContent, getBoardFooterContent } from "./footer-content.ts";
@@ -291,6 +292,7 @@ export async function renderBoardTui(
 		core?: Core;
 		viewSwitcher?: import("./view-switcher.ts").ViewSwitcher;
 		onTaskSelect?: (task: Task) => void;
+		onTaskLaunch?: (task: Task, onProgress: (stage: string) => void) => Promise<{ tabId: string }>;
 		onTabPress?: () => Promise<void>;
 		subscribeUpdates?: (update: (nextTasks: Task[], nextStatuses: string[]) => void) => void;
 		filters?: {
@@ -356,6 +358,7 @@ export async function renderBoardTui(
 
 	await new Promise<void>((resolve) => {
 		const screen = options?.screen ?? createScreen({ title: formatTuiTitle("Board", options?.projectName) });
+		const handoffFeedback = createHandoffFeedback(screen);
 		const container = box({
 			parent: screen,
 			width: "100%",
@@ -376,6 +379,7 @@ export async function renderBoardTui(
 		let currentStatuses = initialColumns.map((column) => column.status);
 		let hideEmptyColumns = options?.hideEmptyColumns ?? false;
 		let pendingSettingWrite: Promise<void> | null = null;
+		let pendingTaskLaunch: Promise<void> | null = null;
 		let currentCol = 0;
 		let popupOpen = false;
 		// The task popup renders a snapshot, so the board remembers which task it shows and
@@ -1085,7 +1089,10 @@ export async function renderBoardTui(
 					" {green-fg}MOVE MODE{/} | {cyan-fg}[←→]{/} Change Column | {cyan-fg}[↑↓]{/} Reorder | {cyan-fg}[Shift+↑↓]{/} Highlight | {cyan-fg}[Shift+M]{/} Select | {cyan-fg}[Enter]{/} Confirm | {cyan-fg}[Esc]{/} Cancel",
 				);
 			} else {
-				const base = getBoardFooterContent({ hasProjects: configuredProjects.length > 0 });
+				const base = getBoardFooterContent({
+					hasProjects: configuredProjects.length > 0,
+					hasHerdr: Boolean(options?.onTaskLaunch),
+				});
 				setFooterContent(hasActiveSharedFilters() ? `${base} | {yellow-fg}Filtered{/}` : base);
 			}
 			syncBoardAreaLayout();
@@ -1104,6 +1111,22 @@ export async function renderBoardTui(
 			}, durationMs);
 		};
 
+		const launchTask = (task: Task): Promise<void> => {
+			if (pendingTaskLaunch || modalOpen || filterPopupOpen || moveOp || currentFocus === "filters") {
+				return Promise.resolve();
+			}
+			const launch = options?.onTaskLaunch;
+			pendingTaskLaunch = runWithModalGuard(() =>
+				handoffFeedback.run(task.id, (onProgress) => {
+					if (!launch) throw new Error("Set --herdr-session or BACKLOG_HERDR_SESSION to enable Codex handoff.");
+					return launch(task, onProgress);
+				}),
+			).finally(() => {
+				pendingTaskLaunch = null;
+			});
+			return pendingTaskLaunch;
+		};
+
 		/**
 		 * Tear the board down, optionally handing off to another view before resolving.
 		 * First request wins: while a pending write delays the close, further exit actions
@@ -1116,10 +1139,12 @@ export async function renderBoardTui(
 				// A Shift+H write can still be in flight, and the caller may exit the process
 				// as soon as the board resolves, which would drop the setting.
 				if (pendingSettingWrite) await pendingSettingWrite;
+				if (pendingTaskLaunch) await pendingTaskLaunch;
 				// Same for a confirmed move: quitting right after Enter must not let the
 				// process exit before the write the user confirmed has persisted.
 				if (pendingMoveWrite) await pendingMoveWrite;
 				clearFooterTimer();
+				handoffFeedback.destroy();
 				screen.destroy();
 				await beforeResolve?.();
 				resolve();
@@ -1555,6 +1580,8 @@ export async function renderBoardTui(
 				}
 			});
 
+			contentArea.key(["w", "W", "S-w"], () => launchTask(task));
+
 			contentArea.key(["c", "C"], async () => {
 				if (task.branch) {
 					showTransientFooter(` {red-fg}Cannot complete task from branch "${task.branch}".{/}`);
@@ -1675,6 +1702,13 @@ export async function renderBoardTui(
 			const task = column.tasks[idx];
 			if (!task) return;
 			await openTaskPopup(task);
+		});
+
+		screen.key(["w", "W", "S-w"], async () => {
+			if (popupOpen) return;
+			const column = columns[currentCol];
+			const task = column?.tasks[column.list.selected ?? 0];
+			if (task) await launchTask(task);
 		});
 
 		screen.key(["e", "E", "S-e"], async () => {
@@ -2037,7 +2071,12 @@ export async function renderBoardTui(
 
 		screen.key(["?"], async () => {
 			if (popupOpen || filterPopupOpen || modalOpen || moveOp) return;
-			await runWithModalGuard(() => openHelpPopup(screen, "board", { hasProjects: configuredProjects.length > 0 }));
+			await runWithModalGuard(() =>
+				openHelpPopup(screen, "board", {
+					hasProjects: configuredProjects.length > 0,
+					hasHerdr: Boolean(options?.onTaskLaunch),
+				}),
+			);
 		});
 
 		screen.key(["y", "Y"], async () => {
