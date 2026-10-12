@@ -1,4 +1,4 @@
-import type { BoxInterface, ListInterface, ScreenInterface } from "neo-neo-bblessed";
+import type { BoxInterface, ListInterface, ScreenInterface, ScrollableTextInterface } from "neo-neo-bblessed";
 import { box, list } from "neo-neo-bblessed";
 import {
 	type BoardLayout,
@@ -17,6 +17,7 @@ import {
 } from "../utils/milestone-filter.ts";
 import { getPriorityOptions } from "../utils/priority-config.ts";
 import { getProjectValues, resolveProjectValues } from "../utils/project-config.ts";
+import { isAmbiguousTaskIdError } from "../utils/task-path.ts";
 import { applyTaskFilters, createTaskSearchIndex } from "../utils/task-search.ts";
 import { compareTaskIds } from "../utils/task-sorting.ts";
 import { getTaskTypeValues, resolveTaskTypeValues } from "../utils/task-type-config.ts";
@@ -32,6 +33,7 @@ import { openHelpPopup } from "./components/help-popup.ts";
 import { openTaskComposer, type TaskComposerOptions } from "./components/task-composer.ts";
 import { formatFooterContent, getBoardFooterContent } from "./footer-content.ts";
 import { formatProjectBadge } from "./project.ts";
+import { loadRelatedTaskChoices } from "./related-tasks.ts";
 import { getStatusIcon } from "./status-icon.ts";
 import {
 	completeTaskFromTui,
@@ -384,11 +386,20 @@ export async function renderBoardTui(
 		let popupOpen = false;
 		// The task popup renders a snapshot, so the board remembers which task it shows and
 		// what that task's content looked like to keep it in step with later updates.
-		let openPopup: { taskId: string; signature: string; close: () => void } | null = null;
-		const closeOpenPopup = () => {
+		let openPopup: {
+			taskId: string;
+			signature: string;
+			contentArea: ScrollableTextInterface;
+			readById: boolean;
+			close: () => void;
+		} | null = null;
+		const popupHistory: { taskId: string; scroll: number }[] = [];
+		let popupNavigationPending = false;
+		const closeOpenPopup = (clearHistory = true) => {
 			openPopup?.close();
 			openPopup = null;
 			popupOpen = false;
+			if (clearHistory) popupHistory.length = 0;
 		};
 		let popupSyncPending = false;
 		/** Focus a column after a popup closes; the board may have lost columns while it was open. */
@@ -1205,7 +1216,11 @@ export async function renderBoardTui(
 				nextStatuses.length > 0 &&
 				(nextStatuses.length !== currentStatuses.length ||
 					nextStatuses.some((status, index) => status !== currentStatuses[index]));
-			if (!tasksChanged && !statusesChanged) return;
+			if (!tasksChanged && !statusesChanged) {
+				// A watcher can publish an unchanged board corpus while a filtered-out detail changed.
+				if (openPopup?.readById) void syncOpenPopup();
+				return;
+			}
 
 			// Update source of truth
 			currentTasks = nextTasks;
@@ -1529,6 +1544,12 @@ export async function renderBoardTui(
 					// Feed the edit through the shared update funnel so the board and any open
 					// popup refresh the same way a watcher update would.
 					updateBoard(nextTasks, []);
+					// A related task may not belong to the board's loaded corpus (e.g. --ready).
+					if (!nextTasks.some((candidate) => candidate.id === editedTask.id) && openPopup?.taskId === task.id) {
+						const scroll = openPopup.contentArea.childBase;
+						closeOpenPopup(false);
+						await openTaskPopup(editedTask, scroll, true);
+					}
 				}
 
 				// The editor owned the terminal; repaint even when nothing changed.
@@ -1543,10 +1564,106 @@ export async function renderBoardTui(
 			}
 		};
 
-		const openTaskPopup = async (task: Task): Promise<void> => {
+		const returnFromTaskPopup = async (): Promise<void> => {
+			if (popupNavigationPending || modalOpen || !openPopup) return;
+			if (popupHistory.length === 0) {
+				const taskId = openPopup.taskId;
+				closeOpenPopup();
+				const columnIndex = columns.findIndex((column) => column.tasks.some((candidate) => candidate.id === taskId));
+				restoreColumnFocus(
+					columnIndex === -1 ? currentCol : columnIndex,
+					columns[columnIndex]?.tasks.findIndex((candidate) => candidate.id === taskId),
+				);
+				return;
+			}
+			popupNavigationPending = true;
+			try {
+				const core = await getCore();
+				while (popupHistory.length > 0) {
+					const previous = popupHistory.pop();
+					if (!previous) break;
+					try {
+						const task = await core.getTaskWithSubtasks(previous.taskId);
+						if (!task) throw new Error(`${previous.taskId} not found`);
+						closeOpenPopup(false);
+						await openTaskPopup(task, previous.scroll, true);
+						return;
+					} catch (error) {
+						showTaskReadError(error);
+					}
+				}
+				closeOpenPopup();
+				restoreColumnFocus(currentCol);
+			} finally {
+				finishPopupNavigation();
+			}
+		};
+
+		const showTaskReadError = (error: unknown) => {
+			const message = isAmbiguousTaskIdError(error)
+				? `Ambiguous task ID ${error.taskId}; run backlog doctor.`
+				: error instanceof Error
+					? error.message
+					: "Could not read task";
+			showTransientFooter(` {red-fg}${message}{/}`, 6000);
+		};
+
+		const finishPopupNavigation = () => {
+			popupNavigationPending = false;
+			openPopup?.contentArea.focus();
+			if (popupSyncPending) {
+				popupSyncPending = false;
+				void syncOpenPopup();
+			}
+			screen.render();
+		};
+
+		const openRelatedTasks = async (): Promise<void> => {
+			if (modalOpen || popupNavigationPending || !openPopup) return;
+			popupNavigationPending = true;
+			const current = openPopup;
+			try {
+				await runWithModalGuard(async () => {
+					const core = await getCore();
+					const choices = await loadRelatedTaskChoices(core, { id: current.taskId });
+					if (choices.length === 0) {
+						showTransientFooter(" {gray-fg}No related tasks.{/}");
+						return;
+					}
+					const id = await openSingleSelectFilterPopup({
+						screen,
+						title: `Related Tasks - ${current.taskId}`,
+						choices,
+						selectedValue: "",
+					});
+					if (!id || openPopup !== current) return;
+					const task = await core.getTaskWithSubtasks(id);
+					if (!task) throw new Error(`${id} not found`);
+					popupHistory.push({ taskId: current.taskId, scroll: current.contentArea.childBase });
+					closeOpenPopup(false);
+					await openTaskPopup(task, 0, true);
+				});
+			} catch (error) {
+				showTaskReadError(error);
+			} finally {
+				finishPopupNavigation();
+			}
+		};
+
+		const openTaskPopup = async (task: Task, scroll = 0, readById = false): Promise<void> => {
 			popupOpen = true;
 
-			const popup = await createTaskPopup(screen, task, resolveMilestoneLabel, options?.dateFormat, configuredProjects);
+			const popup = await createTaskPopup(
+				screen,
+				task,
+				resolveMilestoneLabel,
+				options?.dateFormat,
+				configuredProjects,
+				{
+					onClose: () => void returnFromTaskPopup(),
+					shortcuts: " {cyan-fg}[R]{/} Related tasks | {cyan-fg}[Esc/q]{/} Back",
+				},
+			);
 			if (!popup) {
 				popupOpen = false;
 				openPopup = null;
@@ -1554,24 +1671,17 @@ export async function renderBoardTui(
 			}
 
 			const { contentArea, close } = popup;
-			openPopup = { taskId: task.id, signature: taskContentSignature(task), close };
-
-			contentArea.key(["escape", "q"], () => {
-				closeOpenPopup();
-				// A status change while the popup was open moves the task to another column,
-				// so follow it instead of returning to the column it was opened from.
-				const columnIndex = columns.findIndex((column) => column.tasks.some((candidate) => candidate.id === task.id));
-				restoreColumnFocus(
-					columnIndex === -1 ? currentCol : columnIndex,
-					columns[columnIndex]?.tasks.findIndex((candidate) => candidate.id === task.id),
-				);
-			});
+			openPopup = { taskId: task.id, signature: taskContentSignature(task), contentArea, readById, close };
+			contentArea.setScroll(scroll);
+			contentArea.key(["r", "R", "S-r"], () => void openRelatedTasks());
 
 			contentArea.key(["e", "E", "S-e"], async () => {
+				if (modalOpen || popupNavigationPending) return;
 				await openTaskEditor(task);
 			});
 
 			contentArea.key(["y", "Y"], async () => {
+				if (modalOpen || popupNavigationPending) return;
 				const success = await copyToClipboard(task.id);
 				if (success) {
 					showTransientFooter(` {green-fg}Copied ${task.id} to clipboard{/}`);
@@ -1583,6 +1693,7 @@ export async function renderBoardTui(
 			contentArea.key(["w", "W", "S-w"], () => launchTask(task));
 
 			contentArea.key(["c", "C"], async () => {
+				if (modalOpen || popupNavigationPending) return;
 				if (task.branch) {
 					showTransientFooter(` {red-fg}Cannot complete task from branch "${task.branch}".{/}`);
 					return;
@@ -1620,6 +1731,7 @@ export async function renderBoardTui(
 			});
 
 			contentArea.key(["a", "A"], async () => {
+				if (modalOpen || popupNavigationPending) return;
 				if (task.branch) {
 					showTransientFooter(` {red-fg}Cannot archive task from branch "${task.branch}".{/}`);
 					return;
@@ -1667,12 +1779,36 @@ export async function renderBoardTui(
 			if (!current) return;
 			// A confirmation dialog is stacked on the popup and owns the keyboard; rebuilding
 			// underneath it would steal focus and leave the dialog unanswerable.
-			if (modalOpen) {
+			if (modalOpen || popupNavigationPending) {
 				popupSyncPending = true;
 				return;
 			}
-			const nextTask = currentTasks.find((candidate) => candidate.id === current.taskId);
+			let nextTask = currentTasks.find((candidate) => candidate.id === current.taskId);
+			if (current.readById) {
+				try {
+					nextTask = (await (await getCore()).getTaskWithSubtasks(current.taskId)) ?? undefined;
+				} catch (error) {
+					if (openPopup !== current) return;
+					if (modalOpen || popupNavigationPending) {
+						popupSyncPending = true;
+						return;
+					}
+					showTaskReadError(error);
+					await returnFromTaskPopup();
+					return;
+				}
+			}
+			if (openPopup !== current) return;
+			if (modalOpen || popupNavigationPending) {
+				popupSyncPending = true;
+				return;
+			}
 			if (!nextTask) {
+				if (popupHistory.length > 0) {
+					showTransientFooter(` {yellow-fg}${current.taskId} not found; returning to previous task.{/}`, 6000);
+					await returnFromTaskPopup();
+					return;
+				}
 				closeOpenPopup();
 				restoreColumnFocus(currentCol);
 				showTransientFooter(` {yellow-fg}${current.taskId} is no longer on the board; its details closed.{/}`, 6000);
@@ -1680,8 +1816,9 @@ export async function renderBoardTui(
 			}
 			// Rebuilding only on a content change keeps the watcher echo of an in-popup edit invisible.
 			if (taskContentSignature(nextTask) === current.signature) return;
-			closeOpenPopup();
-			await openTaskPopup(nextTask);
+			const scroll = current.contentArea.childBase;
+			closeOpenPopup(false);
+			await openTaskPopup(nextTask, scroll, current.readById);
 			// The board may have moved on again while the popup was rebuilding.
 			await syncOpenPopup();
 		};

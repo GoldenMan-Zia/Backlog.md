@@ -79,7 +79,11 @@ declare module "neo-neo-bblessed" {
 		items: Array<unknown>;
 		style: { selected?: { bg?: string } } & Record<string, unknown>;
 	}
-	export interface ScrollableTextInterface extends ElementInterface {}
+	export interface ScrollableTextInterface extends ElementInterface {
+		/** First visible content row; getScroll also includes the virtual cursor offset. */
+		childBase: number;
+		setScroll(offset: number): void;
+	}
 	export interface ScrollableBoxInterface extends BoxInterface {
 		getScroll(): number;
 		scrollTo(index: number): void;

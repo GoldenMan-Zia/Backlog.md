@@ -22,6 +22,7 @@ const BOARD_SHORTCUTS: Shortcut[] = [
 	{ key: "←→", desc: "Navigate columns" },
 	{ key: "↑↓", desc: "Navigate tasks" },
 	{ key: "Enter", desc: "View task details" },
+	{ key: "R", desc: "Related tasks in details (Esc/q: back)" },
 	{ key: "E", desc: "Edit task" },
 	{ key: "M", desc: "Move tasks (Shift+M selects more in move mode)" },
 	{ key: "C", desc: "Complete task" },

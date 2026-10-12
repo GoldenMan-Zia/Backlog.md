@@ -1823,6 +1823,7 @@ export async function createTaskPopup(
 	resolveMilestoneLabel?: (milestone: string) => string,
 	dateFormat?: string,
 	configuredProjects?: string[],
+	options?: { onClose?: () => void; shortcuts?: string },
 ): Promise<{
 	background: BoxInterface;
 	popup: BoxInterface;
@@ -1932,11 +1933,24 @@ export async function createTaskPopup(
 		background.destroy();
 		screen.render();
 	};
-
-	popup.key(["escape", "q", "C-c"], () => {
-		closePopup();
+	const requestClose = () => {
+		if (options?.onClose) options.onClose();
+		else closePopup();
 		return false;
-	});
+	};
+
+	popup.key(["escape", "q", "C-c"], requestClose);
+	if (options?.shortcuts) {
+		box({
+			parent: popup,
+			bottom: 0,
+			left: 1,
+			right: 1,
+			height: 1,
+			tags: true,
+			content: options.shortcuts,
+		});
+	}
 
 	contentArea.on("focus", () => {
 		const popupStyle = popup.style as { border?: { fg?: string } };
@@ -1950,10 +1964,7 @@ export async function createTaskPopup(
 		screen.render();
 	});
 
-	contentArea.key(["escape"], () => {
-		closePopup();
-		return false;
-	});
+	contentArea.key(["escape", "q"], requestClose);
 
 	setImmediate(() => {
 		contentArea.focus();

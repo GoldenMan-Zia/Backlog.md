@@ -45,6 +45,7 @@ describe("help popup shortcuts", () => {
 		expect(keys).toContain("T");
 		expect(keys).toContain("M");
 		expect(keys).toContain("N");
+		expect(keys).toContain("R");
 		expect(keys).toContain("←→");
 	});
 
@@ -63,7 +64,7 @@ describe("help popup shortcuts", () => {
 			const count = getHelpShortcuts(context).length;
 			// 4 rows of chrome (borders, top spacer, help line) leave one row per shortcut.
 			expect(getHelpPopupHeight(count, 40) - 4).toBe(count);
-			expect(getHelpPopupHeight(count, 24) - 4).toBe(count);
+			expect(getHelpPopupHeight(count, 24) - 4).toBe(Math.min(count, 18));
 			for (const screenHeight of [4, 6, 10, 14, 18, 24, 30]) {
 				expect(getHelpPopupHeight(count, screenHeight)).toBeLessThanOrEqual(screenHeight);
 			}
@@ -102,7 +103,7 @@ describe("help popup shortcuts", () => {
 			for (let index = 0; index <= shortMaxOffset; index += 1) pressKey(mutableScreen.focused, "down");
 			expect(viewport?.childBase).toBe(shortMaxOffset);
 
-			mutableScreen.height = 24;
+			mutableScreen.height = 40;
 			mutableScreen.emit("resize");
 			widgets = collectWidgets(screen as unknown as { children?: unknown[] });
 			const expandedViewport = widgets.find((widget) => widget.type === "scrollable-box");

@@ -4,6 +4,8 @@ import type { Core, TuiTaskEditResult } from "../core/backlog.ts";
 import type { Task } from "../types/index.ts";
 import { renderBoardTui } from "../ui/board.ts";
 import { createScreen } from "../ui/tui.ts";
+import { AmbiguousTaskIdError } from "../utils/task-path.ts";
+import { attachSubtaskSummaries } from "../utils/task-subtasks.ts";
 import { withTimeout } from "./test-utils.ts";
 
 type EmittingWidget = {
@@ -13,6 +15,9 @@ type TestWidget = {
 	type?: string;
 	children?: TestWidget[];
 	getContent?: () => string;
+	childBase?: number;
+	setScroll?: (offset: number) => void;
+	selected?: number;
 } & EmittingWidget;
 
 const BOARD_STATUSES = ["To Do", "In Progress", "Done"];
@@ -71,9 +76,14 @@ function screenText(screen: ScreenInterface): string {
 
 async function withBoardPopup(
 	options: {
-		editTaskInTui?: () => Promise<TuiTaskEditResult>;
 		onTaskLaunch?: (task: Task, onProgress: (stage: string) => void) => Promise<{ tabId: string }>;
 		openPopup?: boolean;
+		editTaskInTui?: (id: string) => Promise<TuiTaskEditResult>;
+		completeTask?: (id: string) => Promise<boolean>;
+		archiveTask?: (id: string) => Promise<{ success: boolean; cleanedTaskIds: string[] }>;
+		readTask?: (id: string) => Promise<Task | null>;
+		readTasks?: Task[];
+		filters?: { searchQuery: string };
 		tasks?: Task[];
 		hideEmptyColumns?: boolean;
 		/** Columns to step right through before opening the popup. */
@@ -88,16 +98,36 @@ async function withBoardPopup(
 		focused: () => EmittingWidget | undefined;
 	}) => Promise<void>,
 ): Promise<void> {
-	const descriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
-	Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: true });
-	const screen = createScreen({ smartCSR: false }) as ScreenInterface & EmittingWidget;
+	const descriptors = new Map(
+		["isTTY", "columns", "rows"].map((key) => [key, Object.getOwnPropertyDescriptor(process.stdout, key)]),
+	);
+	for (const [key, value] of Object.entries({ isTTY: true, columns: 120, rows: 40 })) {
+		Object.defineProperty(process.stdout, key, { configurable: true, value });
+	}
+	const screen = createScreen({ smartCSR: false, width: 120, height: 40 }) as ScreenInterface & EmittingWidget;
 	let subscriber: ((nextTasks: Task[], nextStatuses: string[]) => void) | undefined;
 	try {
-		const core = { editTaskInTui: options.editTaskInTui ?? (async () => ({ changed: false })) } as unknown as Core;
+		const readTasks = options.readTasks ?? options.tasks ?? [createTask(), OTHER_TASK];
+		const readTask = options.readTask ?? (async (id: string) => readTasks.find((task) => task.id === id) ?? null);
+		const core = {
+			editTaskInTui: options.editTaskInTui ?? (async () => ({ changed: false })),
+			completeTask: options.completeTask,
+			archiveTask: options.archiveTask,
+			filesystem: { loadConfig: async () => ({ statuses: BOARD_STATUSES, autoCommit: false }) },
+			fs: { loadConfig: async () => ({ statuses: BOARD_STATUSES, autoCommit: false }) },
+			getTask: readTask,
+			getTaskWithSubtasks: async (id: string) => {
+				const task = await readTask(id);
+				return task ? attachSubtaskSummaries(task, readTasks) : null;
+			},
+		} as unknown as Core;
 		const boardPromise = renderBoardTui(options.tasks ?? [createTask(), OTHER_TASK], BOARD_STATUSES, "horizontal", 20, {
 			screen,
 			core,
 			onTaskLaunch: options.onTaskLaunch,
+			filters: options.filters
+				? { priorityFilter: "", labelFilter: [], milestoneFilter: "", ...options.filters }
+				: undefined,
 			hideEmptyColumns: options.hideEmptyColumns,
 			subscribeUpdates: (update) => {
 				subscriber = update;
@@ -130,7 +160,7 @@ async function withBoardPopup(
 		});
 
 		// The board ignores q while a popup or modal is open, so dismiss them first.
-		for (let attempt = 0; attempt < 2 && findPopupBody(screen); attempt++) {
+		for (let attempt = 0; attempt < 10 && findPopupBody(screen); attempt++) {
 			pressKey((screen as unknown as { focused?: EmittingWidget }).focused, "escape");
 			await Bun.sleep(20);
 		}
@@ -138,8 +168,10 @@ async function withBoardPopup(
 		await withTimeout(boardPromise, "board close", 5000);
 	} finally {
 		screen.destroy();
-		if (descriptor) Object.defineProperty(process.stdout, "isTTY", descriptor);
-		else Reflect.deleteProperty(process.stdout, "isTTY");
+		for (const [key, descriptor] of descriptors) {
+			if (descriptor) Object.defineProperty(process.stdout, key, descriptor);
+			else Reflect.deleteProperty(process.stdout, key);
+		}
 	}
 }
 
@@ -373,6 +405,314 @@ describe("board task popup stays in sync with live task state", () => {
 			]);
 
 			expect(popupBody()).toBe(original);
+		});
+	});
+});
+
+describe("board related task navigation", () => {
+	const parent = createTask({
+		title: "Parent task",
+		references: ["TASK-1.1", "task-01.01", "TASK-99", "/tmp/task.md", "https://example.com/TASK-2"],
+		description: Array.from({ length: 100 }, (_, i) => `PARENT-LINE-${i}`).join("\n"),
+	});
+	const child = createTask({
+		id: "TASK-1.1",
+		title: "Hidden child",
+		parentTaskId: parent.id,
+		description: "CHILD-BODY",
+	});
+	const grandchild = createTask({
+		id: "TASK-1.1.1",
+		title: "Grandchild",
+		parentTaskId: child.id,
+		description: "GRANDCHILD-BODY",
+	});
+
+	it("deduplicates references and native children, ignores paths, and opens a filtered-out task", async () => {
+		await withBoardPopup(
+			{
+				tasks: [parent, child, OTHER_TASK],
+				readTasks: [parent, child, OTHER_TASK],
+				filters: { searchQuery: "Parent task" },
+			},
+			async ({ focused, text, popupBody }) => {
+				pressKey(focused(), "r");
+				await Bun.sleep(40);
+				expect(text()).toContain("Related Tasks");
+				const rows = (focused() as TestWidget)?.children?.map((row) => row.getContent?.() ?? "").join("\n") ?? "";
+				expect(rows).toContain("TASK-1.1 - Hidden child");
+				expect(rows).not.toContain("/tmp/task.md");
+				expect(rows.match(/TASK-1\.1 -/g)).toHaveLength(1);
+				pressKey(focused(), "enter");
+				await Bun.sleep(40);
+				expect(popupBody()?.getContent?.()).toContain("CHILD-BODY");
+				expect(text()).not.toContain("Related Tasks");
+				pressKey(focused(), "escape");
+				await Bun.sleep(40);
+				expect(popupBody()?.getContent?.()).toContain("PARENT-LINE-0");
+			},
+		);
+	});
+
+	it("restores scroll at each level and the original board selection", async () => {
+		const longChild = { ...child, description: Array.from({ length: 100 }, (_, i) => `CHILD-LINE-${i}`).join("\n") };
+		await withBoardPopup(
+			{ tasks: [parent, OTHER_TASK], readTasks: [parent, longChild, grandchild, OTHER_TASK] },
+			async ({ focused, popupBody, screen }) => {
+				popupBody()?.setScroll?.(12);
+				const parentScroll = popupBody()?.childBase;
+				expect(parentScroll).toBeGreaterThan(0);
+				pressKey(focused(), "r");
+				await Bun.sleep(30);
+				pressKey(focused(), "enter");
+				await Bun.sleep(30);
+				popupBody()?.setScroll?.(9);
+				const childScroll = popupBody()?.childBase;
+				pressKey(focused(), "r");
+				await Bun.sleep(30);
+				// Native parent is the first row; native grandchild is the next.
+				pressKey(focused(), "j");
+				pressKey(focused(), "enter");
+				await Bun.sleep(40);
+				expect(popupBody()?.getContent?.()).toContain("GRANDCHILD-BODY");
+				pressKey(focused(), "escape");
+				await Bun.sleep(40);
+				expect(popupBody()?.getContent?.()).toContain("CHILD-LINE-0");
+				expect(popupBody()?.childBase).toBe(childScroll);
+				pressKey(focused(), "q");
+				await Bun.sleep(40);
+				expect(popupBody()?.getContent?.()).toContain("PARENT-LINE-0");
+				expect(popupBody()?.childBase).toBe(parentScroll);
+				pressKey(focused(), "escape");
+				await Bun.sleep(40);
+				expect(popupBody()).toBeUndefined();
+				pressKey(screen, "enter");
+				await Bun.sleep(30);
+				expect(popupBody()?.getContent?.()).toContain("PARENT-LINE-0");
+			},
+		);
+	});
+
+	it("keeps details and scroll when the picker is cancelled or a reference is missing", async () => {
+		await withBoardPopup({ tasks: [parent], readTasks: [parent, child] }, async ({ focused, text, popupBody }) => {
+			popupBody()?.setScroll?.(8);
+			const scroll = popupBody()?.childBase;
+			pressKey(focused(), "r");
+			await Bun.sleep(30);
+			pressKey(focused(), "escape");
+			await Bun.sleep(30);
+			expect(popupBody()?.childBase).toBe(scroll);
+			pressKey(focused(), "r");
+			await Bun.sleep(30);
+			pressKey(focused(), "j");
+			pressKey(focused(), "enter");
+			await Bun.sleep(40);
+			expect(text()).toContain("TASK-99 not found");
+			expect(popupBody()?.getContent?.()).toContain("PARENT-LINE-0");
+			expect(popupBody()?.childBase).toBe(scroll);
+		});
+	});
+
+	it("fails closed on ambiguous IDs and reads the chosen target again after selection", async () => {
+		let fail = false;
+		let childReads = 0;
+		await withBoardPopup(
+			{
+				tasks: [parent],
+				readTask: async (id) => {
+					if (id === child.id) {
+						childReads++;
+						if (fail) throw new AmbiguousTaskIdError(id, ["first.md", "second.md"]);
+						return child;
+					}
+					return id === parent.id ? parent : null;
+				},
+			},
+			async ({ focused, popupBody, text }) => {
+				pressKey(focused(), "r");
+				await Bun.sleep(30);
+				fail = true;
+				pressKey(focused(), "enter");
+				await Bun.sleep(40);
+				expect(childReads).toBeGreaterThanOrEqual(2);
+				expect(text()).toContain("Ambiguous");
+				expect(popupBody()?.getContent?.()).toContain("PARENT-LINE-0");
+			},
+		);
+	});
+
+	it("defers watcher refresh under the picker and returns to the latest parent", async () => {
+		const tasks = [parent, child];
+		await withBoardPopup({ tasks, readTasks: tasks }, async ({ focused, publishTasks, popupBody, text }) => {
+			pressKey(focused(), "r");
+			await Bun.sleep(30);
+			const picker = focused();
+			tasks[0] = { ...parent, description: "UPDATED-PARENT" };
+			await publishTasks([...tasks]);
+			expect(focused()).toBe(picker);
+			expect(text()).toContain("Related Tasks");
+			pressKey(focused(), "enter");
+			await Bun.sleep(50);
+			expect(popupBody()?.getContent?.()).toContain("CHILD-BODY");
+			pressKey(focused(), "escape");
+			await Bun.sleep(50);
+			expect(popupBody()?.getContent?.()).toContain("UPDATED-PARENT");
+		});
+	});
+
+	it("refreshes a related task outside the board and edits the displayed task", async () => {
+		const tasks = [parent, child];
+		let editedId: string | undefined;
+		await withBoardPopup(
+			{
+				tasks: [parent],
+				readTasks: tasks,
+				editTaskInTui: async (id) => {
+					editedId = id;
+					return { changed: true, task: { ...child, ...tasks[1], description: "EDITED-CHILD" } };
+				},
+			},
+			async ({ focused, publishTasks, popupBody }) => {
+				pressKey(focused(), "r");
+				await Bun.sleep(30);
+				pressKey(focused(), "enter");
+				await Bun.sleep(40);
+				tasks[1] = { ...child, description: "UPDATED-CHILD" };
+				await publishTasks([{ ...parent, title: "Changed parent" }]);
+				expect(popupBody()?.getContent?.()).toContain("UPDATED-CHILD");
+				pressKey(focused(), "e");
+				await Bun.sleep(40);
+				expect(editedId).toBe(child.id);
+				expect(popupBody()?.getContent?.()).toContain("EDITED-CHILD");
+			},
+		);
+	});
+
+	it("refreshes a hidden related task even when the board corpus did not change", async () => {
+		const tasks = [parent, child];
+		await withBoardPopup({ tasks: [parent], readTasks: tasks }, async ({ focused, publishTasks, popupBody }) => {
+			pressKey(focused(), "r");
+			await Bun.sleep(30);
+			pressKey(focused(), "enter");
+			await Bun.sleep(40);
+			tasks[1] = { ...child, description: "HIDDEN-UPDATE" };
+			await publishTasks([parent]);
+			expect(popupBody()?.getContent?.()).toContain("HIDDEN-UPDATE");
+		});
+	});
+
+	it("does not open duplicate pickers while resolving related task IDs", async () => {
+		let reads = 0;
+		await withBoardPopup(
+			{
+				tasks: [parent],
+				readTask: async (id) => {
+					if (id === parent.id) {
+						reads++;
+						await Bun.sleep(20);
+						return parent;
+					}
+					return id === child.id ? child : null;
+				},
+			},
+			async ({ focused, text, popupBody }) => {
+				pressKey(focused(), "r");
+				pressKey(focused(), "r");
+				await Bun.sleep(70);
+				expect(reads).toBe(1);
+				expect(text().match(/Related Tasks/g)).toHaveLength(1);
+				pressKey(focused(), "escape");
+				await Bun.sleep(30);
+				expect(popupBody()).toBeDefined();
+			},
+		);
+	});
+
+	it("explains empty relations without closing or scrolling the current task", async () => {
+		await withBoardPopup({}, async ({ focused, text, popupBody }) => {
+			const original = popupBody();
+			pressKey(focused(), "r");
+			await Bun.sleep(40);
+			expect(text()).toContain("No related tasks");
+			expect(popupBody()).toBe(original);
+		});
+	});
+
+	it("returns to the parent when the viewed hidden task disappears", async () => {
+		const tasks = [parent, child];
+		await withBoardPopup({ tasks: [parent], readTasks: tasks }, async ({ focused, publishTasks, popupBody, text }) => {
+			pressKey(focused(), "r");
+			await Bun.sleep(30);
+			pressKey(focused(), "enter");
+			await Bun.sleep(40);
+			tasks.pop();
+			await publishTasks([parent]);
+			expect(popupBody()?.getContent?.()).toContain("PARENT-LINE-0");
+			expect(text()).toContain("TASK-1.1 not found");
+		});
+	});
+
+	it("skips a deleted parent on back instead of trapping the user", async () => {
+		const tasks = [parent, child];
+		await withBoardPopup({ tasks: [parent], readTasks: tasks }, async ({ focused, popupBody, text }) => {
+			pressKey(focused(), "r");
+			await Bun.sleep(30);
+			pressKey(focused(), "enter");
+			await Bun.sleep(40);
+			tasks.shift();
+			pressKey(focused(), "escape");
+			await Bun.sleep(40);
+			expect(popupBody()).toBeUndefined();
+			expect(text()).toContain("TASK-1 not found");
+			expect((focused() as TestWidget)?.type).toBe("list");
+		});
+	});
+
+	for (const action of ["complete", "archive"] as const) {
+		it(`${action}s the displayed related task rather than the original board task`, async () => {
+			const actedOn: string[] = [];
+			await withBoardPopup(
+				{
+					tasks: [parent],
+					readTasks: [parent, { ...child, status: "Done" }],
+					completeTask: async (id) => {
+						actedOn.push(id);
+						return true;
+					},
+					archiveTask: async (id) => {
+						actedOn.push(id);
+						return { success: true, cleanedTaskIds: [] };
+					},
+				},
+				async ({ focused, popupBody, text }) => {
+					pressKey(focused(), "r");
+					await Bun.sleep(30);
+					pressKey(focused(), "enter");
+					await Bun.sleep(40);
+					pressKey(focused(), action === "complete" ? "c" : "a");
+					await Bun.sleep(30);
+					expect(text()).toContain(child.id);
+					pressKey(focused(), "y");
+					await Bun.sleep(40);
+					expect(actedOn).toEqual([child.id]);
+					expect(popupBody()).toBeUndefined();
+				},
+			);
+		});
+	}
+
+	it("does not rebuild the returned parent from an older board snapshot", async () => {
+		const tasks = [parent, child];
+		await withBoardPopup({ tasks: [parent], readTasks: tasks }, async ({ focused, publishTasks, popupBody }) => {
+			pressKey(focused(), "r");
+			await Bun.sleep(30);
+			pressKey(focused(), "enter");
+			await Bun.sleep(40);
+			tasks[0] = { ...parent, description: "LATEST-PARENT" };
+			pressKey(focused(), "escape");
+			await Bun.sleep(40);
+			await publishTasks([parent]);
+			expect(popupBody()?.getContent?.()).toContain("LATEST-PARENT");
 		});
 	});
 });

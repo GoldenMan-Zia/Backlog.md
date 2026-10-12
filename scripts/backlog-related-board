@@ -1,0 +1,6 @@
+#!/bin/sh
+set -eu
+
+source_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+export BACKLOG_CWD="/Users/goldenman/git"
+exec bun "$source_root/src/cli.ts" board "$@"
