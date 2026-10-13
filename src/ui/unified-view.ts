@@ -11,6 +11,7 @@ import { launchTaskInHerdr } from "../utils/herdr.ts";
 import { collectAvailableLabels } from "../utils/label-filter.ts";
 import { hasAnyPrefix } from "../utils/prefix-config.ts";
 import { applyTaskFilters, createTaskSearchIndex } from "../utils/task-search.ts";
+import type { BoardSort } from "../utils/task-sorting.ts";
 import { type TaskWatcherCallbacks, watchTasks } from "../utils/task-watcher.ts";
 import { renderBoardTui } from "./board.ts";
 import { createLoadingScreen } from "./loading.ts";
@@ -22,6 +23,7 @@ export interface UnifiedViewOptions {
 	core: Core;
 	herdr?: { session: string; workspace?: string };
 	initialView: ViewType;
+	boardSort?: BoardSort;
 	selectedTask?: Task;
 	tasks?: Task[];
 	tasksLoader?: (
@@ -321,6 +323,7 @@ export async function runUnifiedView(options: UnifiedViewOptions): Promise<void>
 		let milestoneEntities = await options.core.filesystem.listMilestones();
 		let milestoneFilterModel = buildTaskViewerMilestoneFilterModel(milestoneEntities);
 		let currentFilters = createUnifiedViewFilters(options.filter);
+		let boardSort = options.boardSort ?? (options.filter?.sort === "updated" ? "updated" : "manual");
 		const initialState: ViewState = {
 			type: options.initialView,
 			selectedTask: options.selectedTask,
@@ -496,6 +499,10 @@ export async function runUnifiedView(options: UnifiedViewOptions): Promise<void>
 				};
 
 				renderBoardTui(kanbanTasks, statuses, layout, maxColumnWidth, {
+					sort: boardSort,
+					onSortChange: (sort) => {
+						boardSort = sort;
+					},
 					core: options.core,
 					onTaskSelect: (task) => {
 						selectedTask = task;

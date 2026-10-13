@@ -174,6 +174,7 @@ backlog task list --json | jq '.tasks[] | .id'
 backlog task edit BACK-1 --comment "Can we split the UI work into a separate PR?" --comment-author @sara
 backlog search "kanban"
 backlog board
+backlog board --sort updated
 
 # Work visually in the browser
 backlog browser

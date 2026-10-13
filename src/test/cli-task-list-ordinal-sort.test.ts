@@ -64,4 +64,19 @@ describe("CLI task list ordinal sorting", () => {
 		expect(result.stderr.toString()).toContain("Invalid sort field: invalid");
 		expect(result.stderr.toString()).toContain("Valid values are: priority, id, ordinal");
 	});
+
+	it("supports recent update sorting through the canonical CLI", async () => {
+		const core = new Core(TEST_DIR);
+		const task = await core.fs.loadTask("task-4");
+		if (!task) throw new Error("Missing fixture task");
+		await core.fs.saveTask({ ...task, updatedDate: "2026-01-02 10:00" });
+		const result = await $`bun ${cliPath} task list --sort updated --plain`.cwd(TEST_DIR).quiet().nothrow();
+		expect(result.exitCode).toBe(0);
+		expectInOrder(result.stdout.toString(), ["TASK-4", "TASK-1", "TASK-2", "TASK-3"]);
+		const jsonResult = await $`bun ${cliPath} task list --sort updated --limit 2 --json`.cwd(TEST_DIR).quiet();
+		expect(JSON.parse(jsonResult.stdout.toString()).tasks.map((task: { id: string }) => task.id)).toEqual([
+			"TASK-4",
+			"TASK-1",
+		]);
+	});
 });

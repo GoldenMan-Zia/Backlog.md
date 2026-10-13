@@ -19,7 +19,7 @@ import { getPriorityOptions } from "../utils/priority-config.ts";
 import { getProjectValues, resolveProjectValues } from "../utils/project-config.ts";
 import { isAmbiguousTaskIdError } from "../utils/task-path.ts";
 import { applyTaskFilters, createTaskSearchIndex } from "../utils/task-search.ts";
-import { compareTaskIds } from "../utils/task-sorting.ts";
+import { type BoardSort, compareTaskIds, sortByUpdatedDate } from "../utils/task-sorting.ts";
 import { getTaskTypeValues, resolveTaskTypeValues } from "../utils/task-type-config.ts";
 import { taskContentSignature } from "../utils/task-watcher.ts";
 import { formatUtcDateForDisplay } from "../utils/utc-date-display.ts";
@@ -97,32 +97,35 @@ function isDoneStatus(status: string): boolean {
 	return normalized === "done" || normalized === "completed" || normalized === "complete";
 }
 
-function buildColumnTasks(status: string, items: Task[], byId: Map<string, Task>): Task[] {
+function buildColumnTasks(status: string, items: Task[], byId: Map<string, Task>, sort: BoardSort): Task[] {
 	const topLevel: Task[] = [];
 	const childrenByParent = new Map<string, Task[]>();
-	const sorted = items.slice().sort((a, b) => {
-		// Use ordinal for custom sorting if available
-		const aOrd = a.ordinal;
-		const bOrd = b.ordinal;
+	const sorted =
+		sort === "updated"
+			? sortByUpdatedDate(items)
+			: items.slice().sort((a, b) => {
+					// Use ordinal for custom sorting if available
+					const aOrd = a.ordinal;
+					const bOrd = b.ordinal;
 
-		// If both have ordinals, compare them
-		if (typeof aOrd === "number" && typeof bOrd === "number") {
-			if (aOrd !== bOrd) return aOrd - bOrd;
-		} else if (typeof aOrd === "number") {
-			// Only A has ordinal -> A comes first
-			return -1;
-		} else if (typeof bOrd === "number") {
-			// Only B has ordinal -> B comes first
-			return 1;
-		}
+					// If both have ordinals, compare them
+					if (typeof aOrd === "number" && typeof bOrd === "number") {
+						if (aOrd !== bOrd) return aOrd - bOrd;
+					} else if (typeof aOrd === "number") {
+						// Only A has ordinal -> A comes first
+						return -1;
+					} else if (typeof bOrd === "number") {
+						// Only B has ordinal -> B comes first
+						return 1;
+					}
 
-		const columnIsDone = isDoneStatus(status);
-		if (columnIsDone) {
-			return compareTaskIds(b.id, a.id);
-		}
+					const columnIsDone = isDoneStatus(status);
+					if (columnIsDone) {
+						return compareTaskIds(b.id, a.id);
+					}
 
-		return compareTaskIds(a.id, b.id);
-	});
+					return compareTaskIds(a.id, b.id);
+				});
 
 	for (const task of sorted) {
 		const parent = task.parentTaskId ? byId.get(task.parentTaskId) : undefined;
@@ -139,20 +142,20 @@ function buildColumnTasks(status: string, items: Task[], byId: Map<string, Task>
 	for (const task of topLevel) {
 		ordered.push(task);
 		const subs = childrenByParent.get(task.id) ?? [];
-		subs.sort((a, b) => compareTaskIds(a.id, b.id));
+		if (sort === "manual") subs.sort((a, b) => compareTaskIds(a.id, b.id));
 		ordered.push(...subs);
 	}
 
 	return ordered;
 }
 
-export function prepareBoardColumns(tasks: Task[], statuses: string[]): ColumnData[] {
+export function prepareBoardColumns(tasks: Task[], statuses: string[], sort: BoardSort = "manual"): ColumnData[] {
 	const { orderedStatuses, groupedTasks } = buildKanbanStatusGroups(tasks, statuses);
 	const byId = new Map<string, Task>(tasks.map((task) => [task.id, task]));
 
 	return orderedStatuses.map((status) => {
 		const items = groupedTasks.get(status) ?? [];
-		const orderedTasks = buildColumnTasks(status, items, byId);
+		const orderedTasks = buildColumnTasks(status, items, byId, sort);
 		return { status, tasks: orderedTasks };
 	});
 }
@@ -290,6 +293,8 @@ export async function renderBoardTui(
 	_layout: BoardLayout,
 	_maxColumnWidth: number,
 	options?: {
+		sort?: BoardSort;
+		onSortChange?: (sort: BoardSort) => void;
 		/** Core instance the board mutates through. Falls back to the runtime working directory. */
 		core?: Core;
 		viewSwitcher?: import("./view-switcher.ts").ViewSwitcher;
@@ -375,6 +380,7 @@ export async function renderBoardTui(
 		});
 
 		let currentTasks = initialTasks;
+		let currentSort = options?.sort ?? "manual";
 		let columns: ColumnView[] = [];
 		let currentColumnsData: ColumnData[] = [];
 		let configuredWorkflowStatuses = [...statuses];
@@ -848,7 +854,7 @@ export async function renderBoardTui(
 		// Pure function to calculate the projected board state
 		const getProjectedColumns = (allTasks: Task[], operation: MoveOperation | null): ColumnData[] => {
 			if (!operation) {
-				return prepareBoardColumns(allTasks, currentStatuses);
+				return prepareBoardColumns(allTasks, currentStatuses, currentSort);
 			}
 
 			const movingTask = allTasks.find((t) => t.id === operation.taskId);
@@ -1103,6 +1109,7 @@ export async function renderBoardTui(
 				const base = getBoardFooterContent({
 					hasProjects: configuredProjects.length > 0,
 					hasHerdr: Boolean(options?.onTaskLaunch),
+					sort: currentSort,
 				});
 				setFooterContent(hasActiveSharedFilters() ? `${base} | {yellow-fg}Filtered{/}` : base);
 			}
@@ -2039,6 +2046,10 @@ export async function renderBoardTui(
 		};
 
 		const enterMoveMode = () => {
+			if (currentSort !== "manual") {
+				showTransientFooter(" {yellow-fg}Switch to manual sort before moving tasks (S).{/}");
+				return;
+			}
 			if (hasMoveBlockingSharedFilters()) {
 				showTransientFooter(" {yellow-fg}Clear filters before moving tasks.{/}");
 				return;
@@ -2171,6 +2182,16 @@ export async function renderBoardTui(
 			});
 			renderView();
 		};
+
+		screen.key(["s", "S", "S-s"], () => {
+			if (popupOpen || filterPopupOpen || modalOpen || moveOp || currentFocus === "filters") return;
+			const selectedId = columns[currentCol]?.tasks[columns[currentCol]?.list.selected ?? 0]?.id;
+			currentSort = currentSort === "manual" ? "updated" : "manual";
+			transientFooterContent = null;
+			clearFooterTimer();
+			options?.onSortChange?.(currentSort);
+			renderView(selectedId);
+		});
 
 		screen.key(["m"], async () => {
 			if (popupOpen || filterPopupOpen || modalOpen || currentFocus === "filters") return;

@@ -12,10 +12,13 @@ function filterKeys(before: string[], after: string[], hasProjects: boolean): st
 	return [...before, ...(hasProjects ? ["V"] : []), ...after].join("/");
 }
 
-export function getBoardFooterContent(options: { hasProjects?: boolean; hasHerdr?: boolean } = {}): string {
+export function getBoardFooterContent(
+	options: { hasProjects?: boolean; hasHerdr?: boolean; sort?: "manual" | "updated" } = {},
+): string {
 	const keys = filterKeys(["T"], ["P", "I", "F"], options.hasProjects ?? false);
 	const herdr = options.hasHerdr ? " | {cyan-fg}[W]{/} Codex in Herdr" : "";
-	return ` {cyan-fg}[Tab]{/} View | {cyan-fg}[N]{/} New | {cyan-fg}[/]{/} Search | {cyan-fg}[${keys}]{/} Filter | {cyan-fg}[←→/↑↓]{/} Nav | {cyan-fg}[Enter]{/} Details | {cyan-fg}[E/M/C/A]{/} Edit/Move/Comp/Arch | {cyan-fg}[Y]{/} Yank${herdr} | {cyan-fg}[?]{/} Help | {cyan-fg}[q]{/} Quit`;
+	const sort = options.sort === "updated" ? "Updated ↓" : "Manual";
+	return ` {cyan-fg}[Tab]{/} View | {cyan-fg}[N]{/} New | {cyan-fg}[/]{/} Search | {cyan-fg}[${keys}]{/} Filter | {cyan-fg}[S]{/} ${sort} | {cyan-fg}[←→/↑↓]{/} Nav | {cyan-fg}[Enter]{/} Details | {cyan-fg}[E/M/C/A]{/} Edit/Move/Comp/Arch | {cyan-fg}[Y]{/} Yank${herdr} | {cyan-fg}[?]{/} Help | {cyan-fg}[q]{/} Quit`;
 }
 
 export function getTaskListFooterContent(options: { hasProjects?: boolean } = {}): string {

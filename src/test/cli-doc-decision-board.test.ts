@@ -235,6 +235,20 @@ describe("CLI Integration", () => {
 	});
 
 	describe("board view command", () => {
+		it("validates board sort before loading a project", async () => {
+			const result = await $`bun ${CLI_PATH} board --sort invalid`.cwd(TEST_DIR).quiet().nothrow();
+			expect(result.exitCode).toBe(1);
+			expect(result.stderr.toString()).toContain("Invalid board sort: invalid. Valid values are: manual, updated");
+		});
+
+		it("documents display sorting on board and board view", async () => {
+			for (const command of [["board"], ["board", "view"]]) {
+				const result = await $`bun ${CLI_PATH} ${command} --help`.quiet();
+				expect(result.stdout.toString()).toContain("--sort <field>");
+				expect(result.stdout.toString()).toContain("manual|updated");
+			}
+		});
+
 		beforeEach(async () => {
 			await $`git init -b main`.cwd(TEST_DIR).quiet();
 

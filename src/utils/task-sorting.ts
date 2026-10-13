@@ -1,4 +1,27 @@
 import { getPriorityRank } from "./priority-config.ts";
+import { parseStoredUtcDate } from "./utc-date-display.ts";
+
+export type BoardSort = "manual" | "updated";
+
+/** Recent semantic edits first, never changing the saved manual order. */
+export function sortByUpdatedDate<T extends { id: string; createdDate?: string; updatedDate?: string }>(
+	items: T[],
+): T[] {
+	const timestamps = new Map(
+		items.map((task) => [
+			task,
+			parseStoredUtcDate(task.updatedDate ?? "")?.getTime() ?? parseStoredUtcDate(task.createdDate ?? "")?.getTime(),
+		]),
+	);
+	return [...items].sort((a, b) => {
+		const aTime = timestamps.get(a);
+		const bTime = timestamps.get(b);
+		if (aTime === undefined && bTime !== undefined) return 1;
+		if (aTime !== undefined && bTime === undefined) return -1;
+		if (aTime !== undefined && bTime !== undefined && aTime !== bTime) return bTime - aTime;
+		return compareTaskIds(a.id, b.id);
+	});
+}
 
 /**
  * Parse a task ID into its numeric components for proper sorting.
@@ -184,13 +207,11 @@ export function sortByOrdinalAndPriority<T extends { id: string; ordinal?: numbe
 
 /**
  * Sort tasks by a specified field with fallback to task ID sorting.
- * Supported fields: 'priority', 'id', 'ordinal'
+ * Supported fields: 'priority', 'id', 'ordinal', 'updated'
  */
-export function sortTasks<T extends { id: string; priority?: string; ordinal?: number }>(
-	items: T[],
-	sortField: string,
-	priorityOrder?: readonly string[],
-): T[] {
+export function sortTasks<
+	T extends { id: string; priority?: string; ordinal?: number; createdDate?: string; updatedDate?: string },
+>(items: T[], sortField: string, priorityOrder?: readonly string[]): T[] {
 	switch (sortField?.toLowerCase()) {
 		case "priority":
 			return sortByPriority(items, priorityOrder);
@@ -198,6 +219,8 @@ export function sortTasks<T extends { id: string; priority?: string; ordinal?: n
 			return sortByTaskId(items);
 		case "ordinal":
 			return sortByOrdinal(items);
+		case "updated":
+			return sortByUpdatedDate(items);
 		default:
 			// Default to ordinal + priority sorting for board view
 			return sortByOrdinalAndPriority(items, priorityOrder);

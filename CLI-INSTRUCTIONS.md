@@ -308,8 +308,24 @@ Dependents (2 direct, 2 total):
 | Action      | Example                                              |
 |-------------|------------------------------------------------------|
 | Kanban board      | `backlog board` (interactive UI, press 'E' to edit in editor) |
+| Recently updated board | `backlog board --sort updated` (display only; newest first) |
 | Export board | `backlog board export [file]` (exports Kanban board to markdown) |
 | Export with version | `backlog board export --export-version "v1.0.0"` (includes version in export) |
+
+The terminal board defaults to manual order. Press **S** to switch between manual
+order and recently updated order; the choice survives Tab view switching for the
+current invocation. Recent order uses `updated_date`, falling back to `created_date`,
+with task ID as a deterministic tie-breaker. Parents stay before their children,
+and children sort within their parent group. Invalid or missing dates go last.
+This never writes `ordinal` or task timestamps. Switch back to manual order before
+moving tasks. `--sort manual` explicitly selects the default mode; both `board`
+and `board view` accept these options. Piped board output retains the Markdown
+export's existing recent-update order.
+
+For scriptable task lists, use `backlog task list --sort updated --plain` or
+`backlog task list --sort updated --json`. Like the existing sorts, plain output
+remains grouped by status; JSON contains the flat sorted list. Editing task content
+or metadata updates `updated_date`; changing only `ordinal` does not.
 
 ## Statistics & Overview
 

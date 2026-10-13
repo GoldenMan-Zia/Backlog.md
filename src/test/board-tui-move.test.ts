@@ -5,7 +5,7 @@ import { join } from "node:path";
 import type { ScreenInterface } from "neo-neo-bblessed";
 import { Core } from "../core/backlog.ts";
 import type { Task } from "../types/index.ts";
-import { renderBoardTui } from "../ui/board.ts";
+import { prepareBoardColumns, renderBoardTui } from "../ui/board.ts";
 import { getHelpShortcuts } from "../ui/components/help-popup.ts";
 import { createScreen } from "../ui/tui.ts";
 import { initializeTestProject, retry, withTimeout } from "./test-utils.ts";
@@ -151,6 +151,56 @@ async function withBoard(
 }
 
 describe("TUI board single-task mover", () => {
+	it("toggles recent update display without writing task files and preserves the selected task", async () => {
+		const tasks = [
+			{ ...createTask("TASK-1", "To Do", 1000), updatedDate: "2026-01-01 10:00" },
+			{ ...createTask("TASK-2", "To Do", 2000), updatedDate: "2026-01-02 10:00" },
+			{ ...createTask("TASK-3", "To Do", 3000), updatedDate: "2026-01-03 10:00" },
+		];
+		const files = await Promise.all(
+			(await core.fs.listTasks()).map(async (task) => ({
+				path: task.filePath as string,
+				content: await Bun.file(task.filePath as string).text(),
+			})),
+		);
+		await withBoard(
+			async ({ screen, rows, footer, update, quit }) => {
+				pressKey(screen, "s");
+				expect(rows().map((row) => row.match(/TASK-\d+/)?.[0])).toEqual(["TASK-3", "TASK-2", "TASK-1"]);
+				expect(footer()).toContain("Updated ↓");
+				pressKey(screen, "m");
+				expect(footer()).toContain("Switch to manual sort before moving tasks");
+				expect(footer()).not.toContain("MOVE MODE");
+				update(tasks.map((task) => (task.id === "TASK-2" ? { ...task, updatedDate: "2026-01-04 10:00" } : task)));
+				expect(rows().map((row) => row.match(/TASK-\d+/)?.[0])).toEqual(["TASK-2", "TASK-3", "TASK-1"]);
+				pressKey(screen, "s");
+				expect(rows().map((row) => row.match(/TASK-\d+/)?.[0])).toEqual(["TASK-1", "TASK-2", "TASK-3"]);
+				pressKey(screen, "m");
+				expect(footer()).toContain("MOVE MODE");
+				expect(rows()[0]).toContain("TASK-1");
+				pressKey(screen, "escape");
+				await quit();
+			},
+			{ tasks },
+		);
+		for (const file of files) expect(await Bun.file(file.path).text()).toBe(file.content);
+	});
+
+	it("sorts within parent groups and keeps parent tasks before their children", () => {
+		const tasks = [
+			{ ...createTask("TASK-1", "To Do", 1000), updatedDate: "2026-01-01" },
+			{ ...createTask("TASK-1.1", "To Do", 1100), parentTaskId: "TASK-1", updatedDate: "2026-01-03" },
+			{ ...createTask("TASK-1.2", "To Do", 1200), parentTaskId: "TASK-1", updatedDate: "2026-01-04" },
+			{ ...createTask("TASK-2", "To Do", 2000), updatedDate: "2026-01-02" },
+		];
+		expect(prepareBoardColumns(tasks, STATUSES, "updated")[0]?.tasks.map((task) => task.id)).toEqual([
+			"TASK-2",
+			"TASK-1",
+			"TASK-1.2",
+			"TASK-1.1",
+		]);
+	});
+
 	it("enters move mode on M and shows the move-mode footer", async () => {
 		await withBoard(({ screen, footer }) => {
 			pressKey(screen, "m");

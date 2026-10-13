@@ -5,8 +5,31 @@ import {
 	parseTaskId,
 	sortByPriority,
 	sortByTaskId,
+	sortByUpdatedDate,
 	sortTasks,
 } from "../utils/task-sorting.ts";
+
+describe("recently updated sorting", () => {
+	test("ignores manual order and falls back to creation date in UTC", () => {
+		const tasks = [
+			{ id: "task-1", ordinal: 1, createdDate: "2026-01-01", updatedDate: "2026-01-01 20:30" },
+			{ id: "task-2", ordinal: 2, createdDate: "2026-01-02" },
+			{ id: "task-3", ordinal: 3, createdDate: "2025-12-01", updatedDate: "2026-01-03 12:00" },
+		];
+		expect(sortTasks(tasks, "updated").map((task) => task.id)).toEqual(["task-3", "task-2", "task-1"]);
+		expect(tasks.map((task) => task.ordinal)).toEqual([1, 2, 3]);
+	});
+
+	test("uses a deterministic numeric ID tie-breaker and places unknown dates last", () => {
+		const tasks = [
+			{ id: "task-10", createdDate: "2026-01-01", updatedDate: "invalid" },
+			{ id: "task-3", createdDate: "2026-02-30" },
+			{ id: "task-2", createdDate: "2026-01-01" },
+			{ id: "task-1" },
+		];
+		expect(sortByUpdatedDate(tasks).map((task) => task.id)).toEqual(["task-2", "task-10", "task-1", "task-3"]);
+	});
+});
 
 describe("parseTaskId", () => {
 	test("parses simple task IDs", () => {

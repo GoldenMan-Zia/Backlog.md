@@ -240,7 +240,7 @@ const MCP_CLIENT_INSTRUCTION_MAP: Record<string, AgentInstructionFile> = {
 
 const DOCUMENT_SEARCH_QUERY_MAX_LENGTH = 200;
 const DOCUMENT_SEARCH_LIMIT_MAX = 100;
-const TASK_SORT_FIELDS = ["priority", "id", "ordinal"];
+const TASK_SORT_FIELDS = ["priority", "id", "ordinal", "updated"];
 const TASK_SORT_FIELD_LIST = TASK_SORT_FIELDS.join(", ");
 const TASK_TYPE_EXAMPLE = JSON.stringify(getCliTaskTypeValues()[0] ?? "<configured-type>");
 
@@ -4481,6 +4481,7 @@ function addBoardOptions(cmd: Command) {
 		.option("-l, --layout <layout>", "board layout (horizontal|vertical)", "horizontal")
 		.option("--vertical", "use vertical layout (shortcut for --layout vertical)")
 		.option("-m, --milestones", "group tasks by milestone")
+		.option("--sort <field>", "board display order (manual|updated); updated is newest first", "manual")
 		.option(
 			"--herdr-session <name>",
 			"target Herdr session for W: open Codex with an unsubmitted task template",
@@ -4499,7 +4500,14 @@ async function handleBoardView(options: {
 	milestones?: boolean;
 	herdrSession?: string;
 	herdrWorkspace?: string;
+	sort?: string;
 }) {
+	const sort = options.sort?.toLowerCase() ?? "manual";
+	if (sort !== "manual" && sort !== "updated") {
+		console.error(`Invalid board sort: ${options.sort}. Valid values are: manual, updated`);
+		process.exitCode = 1;
+		return;
+	}
 	const cwd = await requireProjectRoot();
 	const core = new Core(cwd);
 	const config = await core.filesystem.loadConfig();
@@ -4511,6 +4519,7 @@ async function handleBoardView(options: {
 	await runUnifiedView({
 		core,
 		initialView: "kanban",
+		boardSort: sort,
 		herdr: options.herdrSession ? { session: options.herdrSession, workspace: options.herdrWorkspace } : undefined,
 		milestoneMode: options.milestones,
 		tasksLoader: async (updateProgress) => {
