@@ -129,6 +129,10 @@ export async function launchTaskInHerdr(
 				await Bun.sleep(Math.min(150, remaining()));
 			}
 		}
+		// This local slash command names the session without starting a model turn.
+		// Ordered terminal input lets the editable task template follow without Enter.
+		options.onProgress?.("Naming Codex session...");
+		await execute([...session, "agent", "prompt", paneId, `/rename ${label}`]);
 		// Single-line raw input leaves the message in the composer; never submit Enter here.
 		options.onProgress?.("Prefilling task template...");
 		await execute([...session, "pane", "send-text", paneId, prompt]);

@@ -34,6 +34,8 @@ describe("Herdr task handoff", () => {
 			"tab create",
 			"Starting Codex...",
 			"agent start",
+			"Naming Codex session...",
+			"agent prompt",
 			"Prefilling task template...",
 			"pane send-text",
 			"Focusing Herdr tab...",
@@ -115,8 +117,16 @@ describe("Herdr task handoff", () => {
 		expect(commands[1]?.slice(0, 4)).toEqual(["--session", "default", "agent", "start"]);
 		expect(commands[1]).toContain("codex");
 		expect(commands[1]).toContain("wE:p9");
-		expect(commands[2]?.slice(0, 5)).toEqual(["--session", "default", "pane", "send-text", "wE:p9"]);
-		const prompt = commands[2]?.[5] ?? "";
+		expect(commands[2]).toEqual([
+			"--session",
+			"default",
+			"agent",
+			"prompt",
+			"wE:p9",
+			`/rename task-35 + ${task.title}`,
+		]);
+		expect(commands[3]?.slice(0, 5)).toEqual(["--session", "default", "pane", "send-text", "wE:p9"]);
+		const prompt = commands[3]?.[5] ?? "";
 		expect(prompt).toContain("TASK-35");
 		expect(prompt).toContain("BACKLOG_CWD='/Users/test/git'");
 		expect(prompt).toContain("确认前不要实施");
@@ -124,9 +134,8 @@ describe("Herdr task handoff", () => {
 		expect(
 			Array.from(prompt).some((character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127),
 		).toBe(false);
-		expect(commands[3]).toEqual(["--session", "default", "tab", "focus", "wE:t9"]);
-		expect(commands).toHaveLength(4);
-		expect(commands.flat()).not.toContain("prompt");
+		expect(commands[4]).toEqual(["--session", "default", "tab", "focus", "wE:t9"]);
+		expect(commands).toHaveLength(5);
 		expect(commands.flat()).not.toContain("send-keys");
 		expect(commands.flat()).not.toContain("close");
 		expect(task).toEqual({ id: "TASK-35", title: "绩效：ngsafe 适配 Rocky Linux 9" });
@@ -140,8 +149,9 @@ describe("Herdr task handoff", () => {
 			run,
 		);
 		expect(commands[0]).toContain("task-35 + title $(touch /tmp/never) `command` next");
-		expect(commands[2]?.[5]).toContain("BACKLOG_CWD='/Users/test/it'\"'\"'s work'");
-		expect(commands[2]?.[5]).not.toContain("touch");
+		expect(commands[2]?.[5]).toBe("/rename task-35 + title $(touch /tmp/never) `command` next");
+		expect(commands[3]?.[5]).toContain("BACKLOG_CWD='/Users/test/it'\"'\"'s work'");
+		expect(commands[3]?.[5]).not.toContain("touch");
 	});
 
 	it("rejects a missing session or unsafe task identity before creating anything", async () => {
@@ -157,6 +167,13 @@ describe("Herdr task handoff", () => {
 		const { commands, run } = recordingRunner(2);
 		await expect(launchTaskInHerdr(task, options, run)).rejects.toThrow("wE:t9");
 		expect(commands).toHaveLength(2);
+	});
+
+	it("does not prefill or focus when the rename command fails", async () => {
+		const { commands, run } = recordingRunner(3);
+		await expect(launchTaskInHerdr(task, options, run)).rejects.toThrow("wE:t9");
+		expect(commands).toHaveLength(3);
+		expect(commands[2]?.[3]).toBe("prompt");
 	});
 
 	it("does not guess missing pane identities", async () => {
@@ -181,7 +198,7 @@ describe("Herdr task handoff", () => {
 			return run(args);
 		});
 		expect(commands.filter((args) => args[2] === "tab" && args[3] === "create")).toHaveLength(1);
-		expect(commands.filter((args) => args[2] === "agent")).toHaveLength(2);
+		expect(commands.filter((args) => args[2] === "agent" && args[3] === "start")).toHaveLength(2);
 		expect(commands.filter((args) => args[3] === "send-text")).toHaveLength(1);
 	});
 });

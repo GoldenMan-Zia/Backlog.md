@@ -14,7 +14,7 @@ back to the terminal running Herdr to edit the message and press Enter yourself.
 The board stays open. No task status changes as a result of the handoff.
 
 While opening the session, a centered loading box shows the task ID and the
-current step: creating the tab, starting Codex, prefilling the template, and
+current step: creating the tab, starting Codex, naming the session, prefilling the template, and
 focusing the Herdr tab. Board keyboard and mouse actions are locked until the
 handoff succeeds or fails. The operation has a 75-second total timeout.
 
@@ -23,7 +23,15 @@ the reminder that the template was not submitted. On failure, the board unlocks
 and opens an error dialog. Enter or Esc closes that dialog without closing the
 task details or exiting the board; long errors can be scrolled.
 
-The tab is named `task-35 + <task title>`. Codex reads the task through the CLI
+The tab and saved Codex session are both named `task-35 + <task title>`.
+After Codex is ready, the handoff submits its local `/rename` command before
+prefilling the task template. Only the naming command is submitted; the task
+template stays editable and no model turn starts. This requires a Codex CLI
+version that supports `/rename`.
+Codex may not make a fresh, empty session resumable until its first model turn;
+the handoff does not submit the template just to create saved history.
+
+Codex reads the task through the CLI
 using the explicit ledger root in the template, discusses scope before making
 changes, and is instructed to record plans, progress, evidence, and next steps
 through the Backlog CLI. These are agent instructions, not an automatic completion

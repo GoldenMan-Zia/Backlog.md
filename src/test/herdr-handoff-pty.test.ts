@@ -179,7 +179,9 @@ exit 0
 						throw new Error(`PTY failed (${exit}): ${stdout}\n${stderr}\n${await readFile(transcript, "utf8")}`);
 					const commands = (await readFile(calls, "utf8")).trim().split("\n");
 					expect(commands).toEqual(
-						fail ? ["tab create", "agent start"] : ["tab create", "agent start", "pane send-text", "tab focus"],
+						fail
+							? ["tab create", "agent start"]
+							: ["tab create", "agent start", "agent prompt", "pane send-text", "tab focus"],
 					);
 					expect(await readFile(taskPath)).toEqual(original);
 					for (const task of taskFiles) expect(await readFile(task.path)).toEqual(task.content);
