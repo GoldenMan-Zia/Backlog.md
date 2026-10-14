@@ -150,6 +150,7 @@ import { getVersion } from "./utils/version.ts";
 type IntegrationMode = "mcp" | "cli" | "none";
 
 const CONFIG_GET_KEYS = [
+	"onStatusChange",
 	"defaultEditor",
 	"projectName",
 	"defaultAssignee",
@@ -175,6 +176,7 @@ const CONFIG_GET_KEYS = [
 ] as const;
 
 const CONFIG_SET_KEYS = [
+	"onStatusChange",
 	"defaultEditor",
 	"projectName",
 	"defaultAssignee",
@@ -5069,7 +5071,7 @@ agentsCmd
 
 // Config command group
 const CONFIG_AVAILABLE_KEYS =
-	"Available keys: defaultEditor, projectName, defaultAssignee, defaultStatus, statuses, labels, priorities, types, projects, milestones, definitionOfDone, dateFormat, maxColumnWidth, defaultPort, autoOpenBrowser, hideEmptyColumns, remoteOperations, autoCommit, filesystemOnly, bypassGitHooks, zeroPaddedIds, checkActiveBranches, activeBranchDays";
+	"Available keys: defaultEditor, projectName, defaultAssignee, defaultStatus, statuses, labels, priorities, types, projects, milestones, definitionOfDone, dateFormat, maxColumnWidth, defaultPort, autoOpenBrowser, hideEmptyColumns, remoteOperations, autoCommit, filesystemOnly, bypassGitHooks, zeroPaddedIds, checkActiveBranches, activeBranchDays, onStatusChange";
 
 const configCmd = addHelpSchema(program.command("config"), {
 	reads: "Project Backlog.md configuration",
@@ -5181,6 +5183,9 @@ addHelpSchema(configCmd.command("get <key>"), {
 
 			// Handle specific config keys
 			switch (key) {
+				case "onStatusChange":
+					console.log(config.onStatusChange ?? "");
+					break;
 				case "defaultEditor":
 					if (config.defaultEditor) {
 						console.log(config.defaultEditor);
@@ -5299,6 +5304,10 @@ addHelpSchema(configCmd.command("set <key> <value>"), {
 
 			// Handle specific config keys
 			switch (key) {
+				case "onStatusChange":
+					if (/[\r\n]/.test(value)) throw new Error("onStatusChange must be a single-line shell command");
+					config.onStatusChange = value || undefined;
+					break;
 				case "defaultEditor": {
 					// An explicitly empty value means "no editor" and skips executable validation
 					if (value) {
@@ -5520,6 +5529,7 @@ addHelpSchema(configCmd.command("list"), {
 			console.log("Configuration:");
 			console.log(`  projectName: ${config.projectName}`);
 			console.log(`  defaultEditor: ${config.defaultEditor || "(not set)"}`);
+			console.log(`  onStatusChange: ${config.onStatusChange || "(not set)"}`);
 			console.log(`  defaultAssignee: [${(config.defaultAssignee ?? []).join(", ")}]`);
 			console.log(`  defaultStatus: ${config.defaultStatus || "(not set)"}`);
 			console.log(`  statuses: [${config.statuses.join(", ")}]`);

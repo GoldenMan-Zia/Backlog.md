@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+
+source_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+bun_bin=${BUN_BIN:-$(command -v bun)}
+
+case "${1:---simulate}" in
+	--simulate)
+		command -v expect >/dev/null || { echo 'The simulated terminal test requires expect.' >&2; exit 1; }
+		cd "$source_root"
+		exec "$bun_bin" test --timeout=15000 src/test/codex-summary.test.ts
+		;;
+	--real) ;;
+	--help|-h)
+		cat <<'HELP'
+Usage: bash scripts/test-codex-summary [--simulate | --real]
+
+--simulate  Run automated tests with a fixture Codex CLI, including a real PTY.
+            No model calls or changes to existing ledgers. This is the default.
+--real      Create a disposable ledger with sample history and open its board.
+            Move the sample task to Done with M, then quit with Q immediately.
+            This invokes your real, logged-in Codex CLI in the background.
+
+The real test preserves its temporary ledger and logs for inspection.
+It does not enable the callback in your existing work ledger.
+HELP
+		exit 0
+		;;
+	*) echo "Unknown option: $1 (use --help)" >&2; exit 1 ;;
+esac
+
+command -v "${BACKLOG_SUMMARY_CODEX:-codex}" >/dev/null || { echo 'Codex was not found in PATH.' >&2; exit 1; }
+demo_root=$(mktemp -d "${TMPDIR:-/tmp}/backlog-summary-demo.XXXXXX")
+export BACKLOG_CWD="$demo_root"
+export BACKLOG_SUMMARY_LOG_DIR="$demo_root/logs"
+export BACKLOG_SUMMARY_HISTORY_DIR="$demo_root/history"
+mkdir -p "$BACKLOG_SUMMARY_HISTORY_DIR"
+
+run_cli() {
+	"$bun_bin" "$source_root/src/cli.ts" "$@"
+}
+
+shell_quote() {
+	printf "'"
+	printf '%s' "$1" | sed "s/'/'\"'\"'/g"
+	printf "'"
+}
+
+prefix=$("$bun_bin" -e 'console.log("summarydemo" + crypto.randomUUID().replace(/[^a-f]/g, "").slice(0, 12))')
+run_cli init 'Codex summary demo' --defaults --no-git --integration-mode none --task-prefix "$prefix" >/dev/null
+created=$(run_cli task create '后台总结测试' -d '这是临时测试任务，用模拟会话检查 Codex 是否能够提取进展、结论和验证依据。' --plain)
+task_id=$(printf '%s\n' "$created" | sed -n 's/^Task \([^ ]*\) - .*/\1/p')
+if [[ -z "$task_id" ]]; then echo 'Task creation returned no ID.' >&2; exit 1; fi
+run_cli task edit "$task_id" --final-summary '已有人工总结：此任务只用于测试后台总结流程。' --plain >/dev/null
+
+TASK_ID="$task_id" "$bun_bin" - <<'JS'
+import { join } from "node:path";
+const root = process.env.BACKLOG_CWD;
+const id = process.env.TASK_ID;
+const history = process.env.BACKLOG_SUMMARY_HISTORY_DIR;
+const session = crypto.randomUUID();
+const items = [
+  { type: "session_meta", payload: { id: session, cwd: root } },
+  { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: `请处理账本 ${root} 中的 ${id}。这是模拟历史，请在总结中注明模拟证据。` }] } },
+  { type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "已完成示例缓存清理逻辑。决定只清理过期条目，保留未过期数据。模拟验证：两个过期条目被清除，一个未过期条目保留。遗留：尚未进行真实负载验证。" }] } },
+];
+// A neutral filename deliberately does not carry the task ID.
+await Bun.write(join(history, "sample-conversation.jsonl"), items.map((item) => JSON.stringify(item)).join("\n") + "\n");
+JS
+
+callback="$(shell_quote "$bun_bin") $(shell_quote "$source_root/scripts/backlog-codex-summary.ts")"
+run_cli config set onStatusChange "$callback" >/dev/null
+
+printf '\n临时账本：%s\n测试任务：%s\n' "$demo_root" "$task_id"
+printf '操作：选中任务，按 M，向右移到 Done，Enter 保存，然后立即按 Q 退出。\n'
+printf '预期：后台 Codex 读取模拟历史，保留人工总结，补充结果、决定、模拟验证和遗留事项。\n\n'
+run_cli board
+
+printf '\nboard 已退出，后台总结继续运行。测试数据保留在：%s\n' "$demo_root"
+printf '查看任务：\n  BACKLOG_CWD=%s %s %s task view %s --plain\n' \
+	"$(shell_quote "$demo_root")" "$(shell_quote "$bun_bin")" "$(shell_quote "$source_root/src/cli.ts")" "$task_id"
+printf '查看日志：\n  tail -f %s\n' "$(shell_quote "$BACKLOG_SUMMARY_LOG_DIR/$(printf '%s' "$task_id" | tr '[:upper:]' '[:lower:]').log")"
