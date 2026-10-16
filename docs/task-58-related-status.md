@@ -14,11 +14,19 @@ the list reads it again. The existing status icons and colors are reused. Missin
 ambiguous, and unreadable targets keep their existing warnings; selection still
 uses task IDs. Opening the list does not change task files.
 
+Completed tasks are placed at the bottom by default. Completion follows the
+project's last configured workflow status (`Done` in the default workflow).
+Both groups retain their original relative order. Missing or unreadable targets
+stay in the first group because their completion status is unknown. Reopening
+the list updates its ordering after status changes.
+
 ## Scope and implementation
 
-Based on `fork/local-main` at `2ab5efcb`. The production change is confined to
-`src/ui/related-tasks.ts`; it adds no persisted fields, dependencies, sorting,
-or task lifecycle behavior. The list is a snapshot while open.
+Based on `fork/local-main` at `2ab5efcb`. The production changes are confined to
+`src/ui/related-tasks.ts` and its call in `src/ui/board.ts`. The board supplies its
+configured workflow statuses for stable completion grouping. There are no new
+persisted fields, dependencies, or task lifecycle behaviors. The list is a
+snapshot while open.
 
 ## TDD evidence
 
@@ -46,10 +54,18 @@ reopening its parent's list, while retaining navigation and scroll checks.
 eight tests. The changed related-task module has 100% line and function coverage;
 this is not application-wide coverage. TypeScript and Biome checks passed.
 
+The completed-last follow-up has RED checkpoint `b85f87b2` (four expected sorting
+failures) and GREEN checkpoint `ccb2b36f` (all 11 related-task tests passed).
+The expanded three-file regression passed 42 tests with 180 assertions, including
+the real PTY. It verifies stable grouping, custom terminal states, unknown
+targets, reordering after changes through real Core without file writes, and
+selection of the correct task after sorting. The related-task module retains
+100% line and function coverage in the focused coverage run.
+
 ## Local build
 
 ```sh
-BACKLOG_BUILD_VERSION=1.53.0-local.87dcbaef bun scripts/build.ts
+BACKLOG_BUILD_VERSION=1.53.0-local.ccb2b36f bun scripts/build.ts
 ```
 
 Run the resulting `dist/backlog` with `BACKLOG_CWD` set to the desired ledger.
@@ -61,3 +77,10 @@ All three badges rendered, selecting a child and returning worked, and the proce
 exited normally. SHA-256 checks confirmed that all four task files were unchanged.
 The script, transcript, and receipt are in the worktree's ignored
 `tmp/task-58-verification/` directory.
+
+The compiled sorting follow-up was also verified there using
+`compiled-sort-smoke.py`: the completed child was created first, but the picker
+rendered the pending child, active child, and completed child in that order.
+Enter opened the pending child, returning and exiting worked, and all four task
+files retained their hashes. Results are in `compiled-sort-receipt.json` and
+`compiled-sort-pty.log`.

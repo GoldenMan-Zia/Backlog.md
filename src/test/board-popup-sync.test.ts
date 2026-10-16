@@ -548,6 +548,31 @@ describe("board related task navigation", () => {
 		);
 	});
 
+	it("puts completed children last and opens the first unfinished child by default", async () => {
+		const done = { ...child, status: "Done" };
+		const active = {
+			...child,
+			id: "TASK-1.2",
+			title: "Active child",
+			status: "In Progress",
+			description: "ACTIVE-BODY",
+		};
+		await withBoardPopup(
+			{ tasks: [parent], readTasks: [{ ...parent, references: [] }, done, active] },
+			async ({ focused, popupBody }) => {
+				pressKey(focused(), "r");
+				await Bun.sleep(40);
+				const rows = (focused() as TestWidget)?.children?.map((row) => row.getContent?.() ?? "") ?? [];
+				expect(rows).toHaveLength(2);
+				expect(rows[0]).toContain("TASK-1.2 - Active child");
+				expect(rows[1]).toContain("TASK-1.1 - Hidden child");
+				pressKey(focused(), "enter");
+				await Bun.sleep(40);
+				expect(popupBody()?.getContent?.()).toContain("ACTIVE-BODY");
+			},
+		);
+	});
+
 	it("restores scroll at each level and the original board selection", async () => {
 		const longChild = { ...child, description: Array.from({ length: 100 }, (_, i) => `CHILD-LINE-${i}`).join("\n") };
 		await withBoardPopup(
@@ -781,6 +806,8 @@ describe("board related task navigation", () => {
 				async ({ focused, popupBody, text }) => {
 					pressKey(focused(), "r");
 					await Bun.sleep(30);
+					// The unresolved reference stays above the completed child.
+					pressKey(focused(), "j");
 					pressKey(focused(), "enter");
 					await Bun.sleep(40);
 					pressKey(focused(), action === "complete" ? "c" : "a");
