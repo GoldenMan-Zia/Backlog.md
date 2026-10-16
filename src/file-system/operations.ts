@@ -2166,15 +2166,10 @@ ${description || `Milestone: ${title}`}`,
 					config.activeBranchDays = Number.parseInt(value, 10);
 					break;
 				case "onStatusChange":
-				case "on_status_change": {
-					const parsed = Bun.YAML.parse(trimmed) as Record<string, unknown>;
-					const callback = parsed[key];
-					if (callback !== null && typeof callback !== "string") {
-						throw new Error("onStatusChange must be a shell command string");
-					}
-					config.onStatusChange = callback || undefined;
+				case "on_status_change":
+					// Remove surrounding quotes if present, but preserve inner content
+					config.onStatusChange = value.replace(/^['"]|['"]$/g, "");
 					break;
-				}
 				case "task_prefix":
 					config.prefixes = { task: value.replace(/['"]/g, "") };
 					break;
@@ -2251,7 +2246,7 @@ ${description || `Milestone: ${title}`}`,
 				? [`check_active_branches: ${config.checkActiveBranches}`]
 				: []),
 			...(typeof config.activeBranchDays === "number" ? [`active_branch_days: ${config.activeBranchDays}`] : []),
-			...(config.onStatusChange ? [`onStatusChange: '${config.onStatusChange.replaceAll("'", "''")}'`] : []),
+			...(config.onStatusChange ? [`onStatusChange: '${config.onStatusChange}'`] : []),
 			...(config.prefixes?.task ? [`task_prefix: "${config.prefixes.task}"`] : []),
 			...(config.backlogDirectory ? [`backlog_directory: "${config.backlogDirectory}"`] : []),
 		];
