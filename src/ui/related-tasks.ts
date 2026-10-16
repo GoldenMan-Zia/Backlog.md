@@ -4,6 +4,7 @@ import { extractAnyPrefix } from "../utils/prefix-config.ts";
 import { canonicalTaskId, isNumericTaskId } from "../utils/task-id.ts";
 import { isAmbiguousTaskIdError } from "../utils/task-path.ts";
 import type { FilterPopupChoice } from "./components/filter-popup.ts";
+import { formatStatusWithIcon, getStatusColor, wrapStatusColor } from "./status-icon.ts";
 
 export async function loadRelatedTaskChoices(core: Core, task: Pick<Task, "id">): Promise<FilterPopupChoice[]> {
 	const source = await core.getTaskWithSubtasks(task.id);
@@ -22,7 +23,9 @@ export async function loadRelatedTaskChoices(core: Core, task: Pick<Task, "id">)
 		Array.from(ids, async (id) => {
 			try {
 				const target = await core.getTask(id, { refreshCrossBranch: false });
-				return { value: id, label: `${id} - ${target?.title ?? "Not found"}` };
+				if (!target) return { value: id, label: `${id} - Not found` };
+				const status = wrapStatusColor(`[${formatStatusWithIcon(target.status)}]`, getStatusColor(target.status));
+				return { value: id, label: `${status} ${id} - ${target.title}` };
 			} catch (error) {
 				return {
 					value: id,

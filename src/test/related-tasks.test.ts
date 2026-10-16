@@ -1,14 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { join } from "node:path";
-import blessed from "neo-neo-bblessed";
 import { Core } from "../core/backlog.ts";
 import { serializeTask } from "../markdown/serializer.ts";
 import type { Task } from "../types/index.ts";
 import { loadRelatedTaskChoices } from "../ui/related-tasks.ts";
+import { stripBlessedFgTags as stripTags } from "../ui/utils/strip-tags.ts";
 import { AmbiguousTaskIdError } from "../utils/task-path.ts";
 import { createUniqueTestDir, initializeFilesystemTestProject, safeCleanup } from "./test-utils.ts";
-
-const { stripTags } = blessed.helpers;
 
 const task: Task = {
 	id: "BACK-35",
@@ -42,7 +40,7 @@ describe("related task choices", () => {
 		} as unknown as Core;
 		const choices = await loadRelatedTaskChoices(core, task);
 		expect(choices.map((choice) => choice.value)).toEqual(["BACK-35.1", "BACK-3", "BACK-35.2"]);
-		expect(stripTags(choices[0]?.label)).toBe("[○ To Do] BACK-35.1 - Title BACK-35.1");
+		expect(stripTags(choices[0]?.label ?? "")).toBe("[○ To Do] BACK-35.1 - Title BACK-35.1");
 	});
 
 	it("shows each target's status before its ID, including custom statuses", async () => {
@@ -124,10 +122,10 @@ describe("related tasks through real Core identity resolution", () => {
 	});
 
 	it("reads the latest child status when reopening the list without changing task files", async () => {
-		expect(stripTags((await loadRelatedTaskChoices(core, parent))[0]?.label)).toStartWith("[○ To Do]");
+		expect(stripTags((await loadRelatedTaskChoices(core, parent))[0]?.label ?? "")).toStartWith("[○ To Do]");
 		const path = await core.filesystem.saveTask({ ...child, status: "In Progress" });
 		const before = await Bun.file(path).text();
-		expect(stripTags((await loadRelatedTaskChoices(core, parent))[0]?.label)).toStartWith("[◒ In Progress]");
+		expect(stripTags((await loadRelatedTaskChoices(core, parent))[0]?.label ?? "")).toStartWith("[◒ In Progress]");
 		expect(await Bun.file(path).text()).toBe(before);
 	});
 

@@ -169,6 +169,8 @@ sleep 0.3
 send "r"
 see {Related.*Tasks}
 see {Done.*TASK-1.1 - PTY Child}
+send "\\r"
+see {SECOND-CHILD-UPDATE}
 send "\\033"
 see {PARENT-MARKER-30}
 sleep 0.3
