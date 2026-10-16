@@ -65,11 +65,16 @@ selection of the correct task after sorting. The related-task module retains
 ## Local build
 
 ```sh
-BACKLOG_BUILD_VERSION=1.53.0-local.ccb2b36f bun scripts/build.ts
+BACKLOG_BUILD_VERSION="1.53.0-local.$(git rev-parse --short HEAD)" bun scripts/build.ts
 ```
 
 Run the resulting `dist/backlog` with `BACKLOG_CWD` set to the desired ledger.
-This task does not replace the installed CLI, merge branches, or push commits.
+The trial builds left the installed CLI and main worktree unchanged. After user
+acceptance, local delivery fast-forwards `main` to the accepted task branch,
+builds that exact commit, and installs the executable at `/opt/bin/backlog`.
+The previous executable is backed up before atomic replacement. Remote branches
+are not pushed as part of local delivery. Input-source switching remains a
+separate discussion and is not included in this change.
 
 The compiled CLI also passed a separate PTY smoke test using a temporary ledger
 created through CLI commands: a parent and three children with different statuses.
