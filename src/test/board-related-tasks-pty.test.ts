@@ -91,7 +91,7 @@ const core = new Core(${JSON.stringify(root)});
 const task = await core.getTask("TASK-1.1");
 if (!task) throw new Error("Missing PTY child fixture");
 const description = task.description === "EXTERNAL-CHILD-UPDATE" ? "SECOND-CHILD-UPDATE" : "EXTERNAL-CHILD-UPDATE";
-await core.filesystem.saveTask({ ...task, description });
+await core.filesystem.saveTask({ ...task, description, status: description === "EXTERNAL-CHILD-UPDATE" ? "In Progress" : "Done" });
 core.disposeContentStore();
 `,
 				);
@@ -124,7 +124,7 @@ send "\\033\\[6~"
 see {PARENT-MARKER-30}
 send "r"
 see {Related.*Tasks}
-see {TASK-1.1 - PTY Child}
+see {To.Do.*TASK-1.1 - PTY Child}
 send "\\r"
 see {CHILD-MARKER-0}
 send "\\033\\[6~"
@@ -163,6 +163,12 @@ see {GRANDCHILD-MARKER}
 send "\\033"
 see {SECOND-CHILD-UPDATE}
 sleep 0.3
+send "\\033"
+see {PARENT-MARKER-30}
+sleep 0.3
+send "r"
+see {Related.*Tasks}
+see {Done.*TASK-1.1 - PTY Child}
 send "\\033"
 see {PARENT-MARKER-30}
 sleep 0.3

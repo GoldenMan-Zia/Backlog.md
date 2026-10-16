@@ -534,6 +534,7 @@ describe("board related task navigation", () => {
 				expect(text()).toContain("Related Tasks");
 				const rows = (focused() as TestWidget)?.children?.map((row) => row.getContent?.() ?? "").join("\n") ?? "";
 				expect(rows).toContain("TASK-1.1 - Hidden child");
+				expect(rows).toContain("[○ To Do]");
 				expect(rows).not.toContain("/tmp/task.md");
 				expect(rows.match(/TASK-1\.1 -/g)).toHaveLength(1);
 				pressKey(focused(), "enter");

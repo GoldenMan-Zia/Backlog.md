@@ -1,11 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { join } from "node:path";
+import blessed from "neo-neo-bblessed";
 import { Core } from "../core/backlog.ts";
 import { serializeTask } from "../markdown/serializer.ts";
 import type { Task } from "../types/index.ts";
 import { loadRelatedTaskChoices } from "../ui/related-tasks.ts";
 import { AmbiguousTaskIdError } from "../utils/task-path.ts";
-import { createUniqueTestDir, initializeTestProject, safeCleanup } from "./test-utils.ts";
+import { createUniqueTestDir, initializeFilesystemTestProject, safeCleanup } from "./test-utils.ts";
+
+const { stripTags } = blessed.helpers;
 
 const task: Task = {
 	id: "BACK-35",
@@ -39,7 +42,22 @@ describe("related task choices", () => {
 		} as unknown as Core;
 		const choices = await loadRelatedTaskChoices(core, task);
 		expect(choices.map((choice) => choice.value)).toEqual(["BACK-35.1", "BACK-3", "BACK-35.2"]);
-		expect(choices[0]?.label).toBe("BACK-35.1 - Title BACK-35.1");
+		expect(stripTags(choices[0]?.label)).toBe("[○ To Do] BACK-35.1 - Title BACK-35.1");
+	});
+
+	it("shows each target's status before its ID, including custom statuses", async () => {
+		const statuses = ["To Do", "In Progress", "Done", "Awaiting approval"];
+		const ids = statuses.map((_, index) => `BACK-35.${index + 1}`);
+		const core = {
+			getTaskWithSubtasks: async () => ({ ...task, subtasks: ids }),
+			getTask: async (id: string) => ({ ...task, id, status: statuses[ids.indexOf(id)], title: "Child" }),
+		} as unknown as Core;
+		expect((await loadRelatedTaskChoices(core, task)).map((choice) => stripTags(choice.label))).toEqual([
+			"[○ To Do] BACK-35.1 - Child",
+			"[◒ In Progress] BACK-35.2 - Child",
+			"[✔ Done] BACK-35.3 - Child",
+			"[○ Awaiting approval] BACK-35.4 - Child",
+		]);
 	});
 
 	it("uses the source prefix for unprefixed numeric references", async () => {
@@ -85,7 +103,7 @@ describe("related tasks through real Core identity resolution", () => {
 	beforeEach(async () => {
 		root = createUniqueTestDir("related-tasks");
 		core = new Core(root);
-		await initializeTestProject(core, "Related tasks", false);
+		await initializeFilesystemTestProject(core, "Related tasks");
 		await core.filesystem.saveTask(parent);
 		await core.filesystem.saveTask(child);
 	});
@@ -95,10 +113,22 @@ describe("related tasks through real Core identity resolution", () => {
 	});
 
 	it("discovers native children without references and resolves their parent", async () => {
-		expect(await loadRelatedTaskChoices(core, parent)).toEqual([
-			{ value: child.id, label: `${child.id} - Native child` },
+		const children = await loadRelatedTaskChoices(core, parent);
+		expect(children.map((choice) => ({ ...choice, label: stripTags(choice.label) }))).toEqual([
+			{ value: child.id, label: `[○ To Do] ${child.id} - Native child` },
 		]);
-		expect(await loadRelatedTaskChoices(core, child)).toEqual([{ value: parent.id, label: `${parent.id} - Parent` }]);
+		const parents = await loadRelatedTaskChoices(core, child);
+		expect(parents.map((choice) => ({ ...choice, label: stripTags(choice.label) }))).toEqual([
+			{ value: parent.id, label: `[○ To Do] ${parent.id} - Parent` },
+		]);
+	});
+
+	it("reads the latest child status when reopening the list without changing task files", async () => {
+		expect(stripTags((await loadRelatedTaskChoices(core, parent))[0]?.label)).toStartWith("[○ To Do]");
+		const path = await core.filesystem.saveTask({ ...child, status: "In Progress" });
+		const before = await Bun.file(path).text();
+		expect(stripTags((await loadRelatedTaskChoices(core, parent))[0]?.label)).toStartWith("[◒ In Progress]");
+		expect(await Bun.file(path).text()).toBe(before);
 	});
 
 	it("does not pick a task when canonical IDs collide on disk", async () => {
