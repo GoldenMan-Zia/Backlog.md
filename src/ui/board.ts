@@ -1639,7 +1639,7 @@ export async function renderBoardTui(
 			try {
 				await runWithModalGuard(async () => {
 					const core = await getCore();
-					const choices = await loadRelatedTaskChoices(core, { id: current.taskId });
+					const choices = await loadRelatedTaskChoices(core, { id: current.taskId }, configuredWorkflowStatuses);
 					if (choices.length === 0) {
 						showTransientFooter(" {gray-fg}No related tasks.{/}");
 						return;

@@ -3,10 +3,15 @@ import type { Task } from "../types/index.ts";
 import { extractAnyPrefix } from "../utils/prefix-config.ts";
 import { canonicalTaskId, isNumericTaskId } from "../utils/task-id.ts";
 import { isAmbiguousTaskIdError } from "../utils/task-path.ts";
+import { isTerminalStatus } from "../utils/terminal-status.ts";
 import type { FilterPopupChoice } from "./components/filter-popup.ts";
 import { formatStatusWithIcon, getStatusColor, wrapStatusColor } from "./status-icon.ts";
 
-export async function loadRelatedTaskChoices(core: Core, task: Pick<Task, "id">): Promise<FilterPopupChoice[]> {
+export async function loadRelatedTaskChoices(
+	core: Core,
+	task: Pick<Task, "id">,
+	statuses: readonly string[],
+): Promise<FilterPopupChoice[]> {
 	const source = await core.getTaskWithSubtasks(task.id);
 	if (!source) throw new Error(`${task.id} not found`);
 	const ids = new Set<string>();
@@ -19,11 +24,13 @@ export async function loadRelatedTaskChoices(core: Core, task: Pick<Task, "id">)
 	for (const id of source.subtasks ?? []) ids.add(canonicalTaskId(id));
 	ids.delete(canonicalTaskId(source.id));
 
-	return Promise.all(
+	const completedIds = new Set<string>();
+	const choices = await Promise.all(
 		Array.from(ids, async (id) => {
 			try {
 				const target = await core.getTask(id, { refreshCrossBranch: false });
 				if (!target) return { value: id, label: `${id} - Not found` };
+				if (isTerminalStatus(target.status, statuses)) completedIds.add(id);
 				const status = wrapStatusColor(`[${formatStatusWithIcon(target.status)}]`, getStatusColor(target.status));
 				return { value: id, label: `${status} ${id} - ${target.title}` };
 			} catch (error) {
@@ -34,4 +41,5 @@ export async function loadRelatedTaskChoices(core: Core, task: Pick<Task, "id">)
 			}
 		}),
 	);
+	return choices.sort((a, b) => Number(completedIds.has(a.value)) - Number(completedIds.has(b.value)));
 }
